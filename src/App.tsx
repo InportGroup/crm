@@ -13,6 +13,8 @@ import { Contacts } from './pages/Contacts'
 import { Companies } from './pages/Companies'
 import { Deals } from './pages/Deals'
 import { Tasks } from './pages/Tasks'
+import { Expenses } from './pages/Expenses'
+import { Vault } from './pages/Vault'
 
 export default function App() {
   // Fail loud but friendly rather than constructing a client against nothing.
@@ -39,6 +41,8 @@ export default function App() {
                 <Route path="/companies" element={<Companies />} />
                 <Route path="/deals" element={<Deals />} />
                 <Route path="/tasks" element={<Tasks />} />
+                <Route path="/expenses" element={<Expenses />} />
+                <Route path="/vault" element={<Vault />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

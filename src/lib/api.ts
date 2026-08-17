@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { Activity, Company, Contact, Deal, Task } from './types'
+import type { Activity, Company, Contact, Deal, Expense, Task, VaultEntry } from './types'
 
 /** Turns a PostgrestError into a thrown Error so callers can use try/catch. */
 async function rows<T>(
@@ -88,6 +88,33 @@ export const updateTask = (id: string, values: Partial<Task>) =>
   run(supabase.from('tasks').update(values).eq('id', id))
 
 export const deleteTask = (id: string) => run(supabase.from('tasks').delete().eq('id', id))
+
+// -- expenses ----------------------------------------------------------------
+
+export const listExpenses = () =>
+  rows<Expense>(supabase.from('expenses').select('*').order('spent_on', { ascending: false }))
+
+export const createExpense = (values: Partial<Expense>) =>
+  run(supabase.from('expenses').insert(values))
+
+export const updateExpense = (id: string, values: Partial<Expense>) =>
+  run(supabase.from('expenses').update(values).eq('id', id))
+
+export const deleteExpense = (id: string) => run(supabase.from('expenses').delete().eq('id', id))
+
+// -- vault -------------------------------------------------------------------
+
+export const listVaultEntries = () =>
+  rows<VaultEntry>(supabase.from('vault_entries').select('*').order('title'))
+
+export const createVaultEntry = (values: Partial<VaultEntry>) =>
+  run(supabase.from('vault_entries').insert(values))
+
+export const updateVaultEntry = (id: string, values: Partial<VaultEntry>) =>
+  run(supabase.from('vault_entries').update(values).eq('id', id))
+
+export const deleteVaultEntry = (id: string) =>
+  run(supabase.from('vault_entries').delete().eq('id', id))
 
 /** Empty strings from form inputs should land in the DB as NULL, not "". */
 export function nullifyBlanks<T extends Record<string, unknown>>(values: T): T {

@@ -1,8 +1,9 @@
 # IPG-CRM
 
-A small, self-hosted CRM for the Inport Group team: contacts, companies, a drag-and-drop deal
-pipeline, tasks and an activity timeline. The whole thing is a static React app on **GitHub Pages** talking directly to
-**Supabase** for auth and data — there is no backend of your own to run.
+A small, self-hosted CRM and internal admin tool for the Inport Group team: contacts, companies, a
+drag-and-drop deal pipeline, tasks, an activity timeline, expense tracking and a shared password
+store. The whole thing is a static React app on **GitHub Pages** talking directly to **Supabase**
+for auth and data — there is no backend of your own to run.
 
 ## Stack
 
@@ -34,6 +35,23 @@ a link, and the app shows a "choose a new password" screen when the user returns
 > **These two are a pair.** The shared-workspace policies let *any* authenticated user read
 > *every* record. That is only safe because the domain trigger controls who can obtain an account.
 > Relax the domain rule and you have opened the entire CRM.
+
+### ⚠️ The password vault stores secrets in plain text
+
+`vault_entries.secret` is **not encrypted**. This was a deliberate choice by the project owner,
+and it has consequences worth stating plainly:
+
+- Every teammate who can sign in can read every stored credential.
+- Anyone with a database dump, the `service_role` key, or Supabase dashboard access can read them.
+- RLS protects these rows from the *public internet*, not from insiders or from database access.
+
+**Do not store** banking, payment-processor, domain-registrar or any payment-authority logins here.
+Shared low-stakes logins (carrier portals, a shared inbox) are a reasonable fit.
+
+To move to real protection later, the schema is already prepared: `vault_entries.secret_encrypted`
+is a boolean that lets ciphertext rows coexist with plaintext ones. The upgrade path is to encrypt
+in the browser (AES-GCM with a key derived from a vault passphrase via PBKDF2), write ciphertext
+with the flag set, and decrypt only flagged rows — no schema change, no data loss.
 
 ## How the security model works
 
@@ -70,6 +88,7 @@ Apply in this order (all are idempotent):
 | [`supabase/schema.sql`](supabase/schema.sql)                           | Tables, indexes, triggers, baseline RLS     |
 | [`supabase/domain-restriction.sql`](supabase/domain-restriction.sql)   | Limit sign-up to `@inportgroup.com`         |
 | [`supabase/shared-workspace.sql`](supabase/shared-workspace.sql)       | Swap owner-scoped RLS for shared-team RLS   |
+| [`supabase/expenses-and-vault.sql`](supabase/expenses-and-vault.sql) | Expenses + password vault tables and RLS    |
 | [`supabase/seed.sql`](supabase/seed.sql)                               | Optional demo data                          |
 
 ## Local setup
@@ -94,11 +113,11 @@ Vite reads env files only at startup — restart `npm run dev` after editing `.e
 
 ## Database setup
 
-In the Supabase dashboard, open **SQL Editor → New query**, paste
-[`supabase/schema.sql`](supabase/schema.sql) and run it. It is idempotent, so re-running is safe.
+In the Supabase dashboard, open **SQL Editor → New query** and run the files listed under
+[Running the SQL](#running-the-sql) in order. Each is idempotent, so re-running is safe.
 
-Optionally run [`supabase/seed.sql`](supabase/seed.sql) afterwards for demo records. It attaches
-everything to the oldest user in `auth.users`, so sign up first.
+`seed.sql` is optional demo data; it attaches everything to the oldest user in `auth.users`, so
+sign up first.
 
 ### Email confirmation
 
@@ -153,6 +172,11 @@ Without these, the emailed link bounces to Supabase's default and the user never
 - **Deals** — kanban pipeline with drag-and-drop on desktop and a "Move to…" picker on touch,
   plus weighted-pipeline and win-rate figures.
 - **Tasks** — open / due / done filters, overdue highlighting, one-tap completion.
+- **Expenses** (Internal) — internal spend with category, vendor, payment method and an approval
+  workflow (pending → approved → reimbursed / rejected). Month / pending / to-reimburse totals and
+  a category breakdown. Optionally linked to a company or deal when spend is billable.
+- **Passwords** (Internal) — shared credential store with masked secrets, reveal toggle,
+  copy-to-clipboard and a strong password generator. **See the warning below.**
 - **Activity log** — calls, notes, emails and meetings against any contact or deal.
 - **⌘K search** — one palette across contacts, companies and deals.
 - **Dark mode** — follows the OS by default, with a manual toggle that persists.
@@ -179,6 +203,7 @@ avoid a white flash.
 supabase/schema.sql              tables, indexes, triggers, baseline RLS
 supabase/domain-restriction.sql  @inportgroup.com sign-up trigger
 supabase/shared-workspace.sql    shared-team RLS policies
+supabase/expenses-and-vault.sql  expenses + vault tables and RLS
 supabase/seed.sql                optional demo data
 .github/workflows/deploy.yml     builds and publishes to Pages on push to main
 src/index.css                    design tokens, dark mode, component classes
@@ -188,7 +213,7 @@ src/lib/types.ts                 row types and the stage/status enums
 src/context/                     auth, theme and feedback (toast/confirm) providers
 src/hooks/                       useAsyncData: load, error, reload
 src/components/                  Layout, Modal, CommandPalette, ActivityFeed, Logo, UI primitives
-src/pages/                       Dashboard, Contacts, Companies, Deals, Tasks, Login
+src/pages/                       Dashboard, Contacts, Companies, Deals, Tasks, Expenses, Vault, Login
 ```
 
 ## Scripts

@@ -1,15 +1,23 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { listActivities, listContacts, listDeals, listTasks } from '../lib/api'
+import { listActivities, listContacts, listDeals, listExpenses, listTasks } from '../lib/api'
 import { useAsyncData } from '../hooks/useAsyncData'
 import { useAuth } from '../context/auth'
-import { formatCurrency, formatDate, formatDateTime, fullName, isOverdue } from '../lib/format'
+import {
+  formatCurrency,
+  formatDate,
+  formatDateTime,
+  fullName,
+  isOverdue,
+  todayISO,
+} from '../lib/format'
 import {
   DEAL_STAGES,
   OPEN_STAGES,
   type Activity,
   type Contact,
   type Deal,
+  type Expense,
   type Task,
 } from '../lib/types'
 import { ErrorNote, PageHeader, PriorityBadge, Spinner } from '../components/ui'
@@ -19,25 +27,31 @@ interface Data {
   deals: Deal[]
   tasks: Task[]
   activities: Activity[]
+  expenses: Expense[]
 }
 
 export function Dashboard() {
   const { user } = useAuth()
   const { data, loading, error } = useAsyncData<Data>(async () => {
-    const [contacts, deals, tasks, activities] = await Promise.all([
+    const [contacts, deals, tasks, activities, expenses] = await Promise.all([
       listContacts(),
       listDeals(),
       listTasks(),
       listActivities(8),
+      listExpenses(),
     ])
-    return { contacts, deals, tasks, activities }
+    return { contacts, deals, tasks, activities, expenses }
   })
 
   const stats = useMemo(() => {
     const deals = data?.deals ?? []
     const tasks = data?.tasks ?? []
+    const expenses = data?.expenses ?? []
     const open = deals.filter((d) => OPEN_STAGES.includes(d.stage))
     const won = deals.filter((d) => d.stage === 'won')
+    // todayISO is timezone-aware; toISOString would be UTC and could land in
+    // the wrong month for anyone west of Greenwich late in the evening.
+    const month = todayISO().slice(0, 7)
 
     return {
       contacts: data?.contacts.length ?? 0,
@@ -46,6 +60,10 @@ export function Dashboard() {
       won: won.reduce((sum, d) => sum + Number(d.value), 0),
       openTasks: tasks.filter((t) => !t.completed).length,
       overdue: tasks.filter((t) => !t.completed && isOverdue(t.due_date)).length,
+      spendThisMonth: expenses
+        .filter((e) => e.spent_on.startsWith(month))
+        .reduce((sum, e) => sum + Number(e.amount), 0),
+      pendingExpenses: expenses.filter((e) => e.status === 'pending').length,
     }
   }, [data])
 
@@ -92,7 +110,7 @@ export function Dashboard() {
 
       {error && <ErrorNote message={error} />}
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
         <Stat label="Contacts" value={String(stats.contacts)} to="/contacts" />
         <Stat
           label="Open pipeline"
@@ -107,6 +125,19 @@ export function Dashboard() {
           hint={stats.overdue > 0 ? `${stats.overdue} overdue` : 'nothing overdue'}
           hintTone={stats.overdue > 0 ? 'danger' : 'muted'}
           to="/tasks"
+        />
+        <Stat
+          label="Spend this month"
+          value={formatCurrency(stats.spendThisMonth)}
+          hint={
+            stats.pendingExpenses > 0
+              ? `${stats.pendingExpenses} awaiting approval`
+              : 'nothing pending'
+          }
+          hintTone={stats.pendingExpenses > 0 ? 'warn' : 'muted'}
+          to="/expenses"
+          // Full width on phones (odd tile in a 2-column grid), one column on xl.
+          className="col-span-2 xl:col-span-1"
         />
       </div>
 
@@ -208,22 +239,25 @@ function Stat({
   hint,
   hintTone = 'muted',
   to,
+  className = '',
 }: {
   label: string
   value: string
   hint?: string
-  hintTone?: 'muted' | 'danger'
+  hintTone?: 'muted' | 'danger' | 'warn'
   to: string
+  className?: string
 }) {
+  const hintColor =
+    hintTone === 'danger' ? 'text-danger' : hintTone === 'warn' ? 'text-warn-ink' : 'text-subtle'
   return (
-    <Link to={to} className="card hover:border-brand/40 p-4 transition-colors sm:p-5">
+    <Link
+      to={to}
+      className={`card hover:border-brand/40 p-4 transition-colors sm:p-5 ${className}`}
+    >
       <p className="text-muted text-sm">{label}</p>
       <p className="text-ink mt-1 text-xl font-semibold tracking-tight sm:text-2xl">{value}</p>
-      {hint && (
-        <p className={`mt-1 text-xs ${hintTone === 'danger' ? 'text-danger' : 'text-subtle'}`}>
-          {hint}
-        </p>
-      )}
+      {hint && <p className={`mt-1 text-xs ${hintColor}`}>{hint}</p>}
     </Link>
   )
 }

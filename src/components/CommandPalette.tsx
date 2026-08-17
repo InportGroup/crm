@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listCompanies, listContacts, listDeals } from '../lib/api'
-import { formatCurrency, fullName, initials } from '../lib/format'
+import { listCompanies, listContacts, listDeals, listExpenses, listVaultEntries } from '../lib/api'
+import { formatCurrency, formatDate, fullName, initials } from '../lib/format'
 import { Avatar } from './ui'
 
 interface Hit {
   id: string
-  kind: 'Contact' | 'Company' | 'Deal'
+  kind: 'Contact' | 'Company' | 'Deal' | 'Expense' | 'Password'
   label: string
   detail: string
   to: string
@@ -33,8 +33,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     setLoading(true)
 
     let cancelled = false
-    Promise.all([listContacts(), listCompanies(), listDeals()])
-      .then(([contacts, companies, deals]) => {
+    Promise.all([
+      listContacts(),
+      listCompanies(),
+      listDeals(),
+      listExpenses(),
+      listVaultEntries(),
+    ])
+      .then(([contacts, companies, deals, expenses, vault]) => {
         if (cancelled) return
         const companyNames = new Map(companies.map((c) => [c.id, c.name]))
         setHits([
@@ -63,6 +69,23 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             detail: `${formatCurrency(Number(d.value), d.currency)} · ${d.stage}`,
             to: '/deals',
             initials: d.title.slice(0, 2).toUpperCase(),
+          })),
+          ...expenses.map<Hit>((e) => ({
+            id: `expense-${e.id}`,
+            kind: 'Expense',
+            label: e.description,
+            detail: `${formatCurrency(Number(e.amount), e.currency)} · ${formatDate(e.spent_on)}`,
+            to: '/expenses',
+            initials: e.description.slice(0, 2).toUpperCase(),
+          })),
+          // Titles and usernames only — secrets never enter the search index.
+          ...vault.map<Hit>((v) => ({
+            id: `vault-${v.id}`,
+            kind: 'Password',
+            label: v.title,
+            detail: [v.username, v.category].filter(Boolean).join(' · '),
+            to: '/vault',
+            initials: v.title.slice(0, 2).toUpperCase(),
           })),
         ])
       })

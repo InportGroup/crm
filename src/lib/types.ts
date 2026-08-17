@@ -75,6 +75,88 @@ export interface Task {
   updated_at: string
 }
 
+export type ExpenseCategory =
+  | 'travel'
+  | 'meals'
+  | 'software'
+  | 'hardware'
+  | 'office'
+  | 'marketing'
+  | 'training'
+  | 'utilities'
+  | 'professional'
+  | 'other'
+export type PaymentMethod = 'card' | 'cash' | 'transfer' | 'direct_debit' | 'other'
+export type ExpenseStatus = 'pending' | 'approved' | 'reimbursed' | 'rejected'
+export type VaultCategory = 'portal' | 'email' | 'banking' | 'social' | 'software' | 'server' | 'other'
+
+export interface Expense {
+  id: string
+  owner_id: string
+  company_id: string | null
+  deal_id: string | null
+  description: string
+  amount: number
+  currency: string
+  category: ExpenseCategory
+  spent_on: string
+  vendor: string | null
+  payment_method: PaymentMethod
+  status: ExpenseStatus
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface VaultEntry {
+  id: string
+  owner_id: string
+  company_id: string | null
+  title: string
+  username: string | null
+  secret: string
+  /** Reserved for a future client-side encrypted vault; false for plaintext rows. */
+  secret_encrypted: boolean
+  url: string | null
+  category: VaultCategory
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  'travel',
+  'meals',
+  'software',
+  'hardware',
+  'office',
+  'marketing',
+  'training',
+  'utilities',
+  'professional',
+  'other',
+]
+
+export const PAYMENT_METHODS: PaymentMethod[] = [
+  'card',
+  'cash',
+  'transfer',
+  'direct_debit',
+  'other',
+]
+
+export const EXPENSE_STATUSES: ExpenseStatus[] = ['pending', 'approved', 'reimbursed', 'rejected']
+
+export const VAULT_CATEGORIES: VaultCategory[] = [
+  'portal',
+  'email',
+  'banking',
+  'social',
+  'software',
+  'server',
+  'other',
+]
+
 export const CONTACT_STATUSES: ContactStatus[] = ['lead', 'prospect', 'customer', 'churned']
 export const PRIORITIES: Priority[] = ['low', 'medium', 'high']
 export const ACTIVITY_TYPES: ActivityType[] = ['note', 'call', 'email', 'meeting']
