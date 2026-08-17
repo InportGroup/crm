@@ -1,7 +1,7 @@
-# Clientela CRM
+# IPG-CRM
 
-A small, self-hosted CRM: contacts, companies, a drag-and-drop deal pipeline, tasks and an
-activity timeline. The whole thing is a static React app on **GitHub Pages** talking directly to
+A small, self-hosted CRM for the Inport Group team: contacts, companies, a drag-and-drop deal
+pipeline, tasks and an activity timeline. The whole thing is a static React app on **GitHub Pages** talking directly to
 **Supabase** for auth and data — there is no backend of your own to run.
 
 ## Stack
@@ -111,36 +111,19 @@ SMTP provider before letting anyone else sign up.
 
 ## Deploying to GitHub Pages
 
-The site is currently published from the **`gh-pages` branch**, which holds the built output.
-To publish a change:
+Deploys are automated. Push to `main` and
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) builds and publishes:
 
 ```bash
-npm run build          # BASE_PATH=/crm/ is set by the deploy script below
-cd dist
-git add -A && git commit -m "Deploy" && git push --force origin gh-pages
+git push origin main
 ```
 
-The `dist/` folder is its own small git repo pointed at the same remote, which is why the
-force-push is safe — it only ever rewrites `gh-pages`.
-
-### Switching to automated deploys
-
-[`deploy/github-pages.yml`](deploy/github-pages.yml) is a ready GitHub Actions workflow that
-builds and deploys on every push to `main`. It is **not** at `.github/workflows/` yet because the
-token used to create this repo lacks the `workflow` OAuth scope, and GitHub refuses that path over
-both `git push` and the REST API. To enable it:
-
-```bash
-gh auth refresh -h github.com -s workflow
-mkdir -p .github/workflows
-git mv deploy/github-pages.yml .github/workflows/deploy.yml
-git commit -m "Enable Pages deploy workflow" && git push
-```
-
-Then set **Settings → Pages → Source: GitHub Actions**. The two repository *variables*
-`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are already configured. They are variables rather
-than secrets deliberately — they are public values, and secrets would only give a false sense of
+Pages is set to **Source: GitHub Actions**, and the two repository *variables*
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` supply the build. They are variables rather than
+secrets deliberately — they are public values, and secrets would only give a false sense of
 protection since they end up in the bundle either way.
+
+The `gh-pages` branch is a leftover from the original branch-based deploy and is no longer read.
 
 ### Two Pages details worth knowing
 
@@ -161,10 +144,30 @@ Confirmation and password-reset links only return to the app if the URL is allow
 Without these, the emailed link bounces to Supabase's default and the user never reaches the
 "choose a new password" screen.
 
+## What's in it
+
+- **Dashboard** — pipeline by stage, open/won totals, overdue tasks, recent activity.
+- **Contacts** — searchable, status-filtered, with a detail drawer showing linked deals, open
+  tasks and a full activity timeline.
+- **Companies** — contact count and open pipeline per organisation.
+- **Deals** — kanban pipeline with drag-and-drop on desktop and a "Move to…" picker on touch,
+  plus weighted-pipeline and win-rate figures.
+- **Tasks** — open / due / done filters, overdue highlighting, one-tap completion.
+- **Activity log** — calls, notes, emails and meetings against any contact or deal.
+- **⌘K search** — one palette across contacts, companies and deals.
+- **Dark mode** — follows the OS by default, with a manual toggle that persists.
+- **Mobile** — bottom tab bar, card layouts in place of tables, and bottom-sheet dialogs.
+
+### Design system
+
+Colours are semantic CSS variables (`--c-ink`, `--c-surface`, `--c-brand`, …) exposed to Tailwind
+through `@theme inline` in [`src/index.css`](src/index.css). Dark mode re-points those variables
+under `[data-theme='dark']`, so components use `bg-surface` / `text-ink` and almost never need a
+`dark:` variant. A small inline script in `index.html` sets the attribute before first paint to
+avoid a white flash.
+
 ### Extending it
 
-- **Activity timeline UI.** The `activities` table, types and `listActivities`/`createActivity`
-  already exist and the dashboard renders them; there is no page to add one from yet.
 - **Detail pages.** Contacts and companies are list-only. A `/contacts/:id` route showing that
   person's deals, tasks and activities is the natural next step.
 - **Show who created what.** `owner_id` and the `profiles` table are populated and readable by the
@@ -173,18 +176,19 @@ Without these, the emailed link bounces to Supabase's default and the user never
 ## Project layout
 
 ```
-supabase/schema.sql            tables, indexes, triggers, baseline RLS
+supabase/schema.sql              tables, indexes, triggers, baseline RLS
 supabase/domain-restriction.sql  @inportgroup.com sign-up trigger
 supabase/shared-workspace.sql    shared-team RLS policies
-supabase/seed.sql              optional demo data
-deploy/github-pages.yml        Actions workflow (see "Switching to automated deploys")
-src/lib/supabase.ts      client + "is it configured?" check
-src/lib/api.ts           one typed function per query
-src/lib/types.ts         row types and the stage/status enums
-src/context/             auth context and provider
-src/hooks/               useAsyncData: load, error, reload
-src/components/          Layout, Modal, shared UI primitives
-src/pages/               Dashboard, Contacts, Companies, Deals, Tasks, Login
+supabase/seed.sql                optional demo data
+.github/workflows/deploy.yml     builds and publishes to Pages on push to main
+src/index.css                    design tokens, dark mode, component classes
+src/lib/supabase.ts              client + "is it configured?" check
+src/lib/api.ts                   one typed function per query
+src/lib/types.ts                 row types and the stage/status enums
+src/context/                     auth, theme and feedback (toast/confirm) providers
+src/hooks/                       useAsyncData: load, error, reload
+src/components/                  Layout, Modal, CommandPalette, ActivityFeed, Logo, UI primitives
+src/pages/                       Dashboard, Contacts, Companies, Deals, Tasks, Login
 ```
 
 ## Scripts

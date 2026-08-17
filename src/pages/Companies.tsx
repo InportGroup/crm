@@ -4,34 +4,49 @@ import {
   deleteCompany,
   listCompanies,
   listContacts,
+  listDeals,
   nullifyBlanks,
   updateCompany,
 } from '../lib/api'
 import { useAsyncData } from '../hooks/useAsyncData'
-import type { Company, Contact } from '../lib/types'
+import { useFeedback } from '../context/feedback'
+import { formatCurrency } from '../lib/format'
+import { OPEN_STAGES, type Company, type Contact, type Deal } from '../lib/types'
 import { Modal } from '../components/Modal'
-import { EmptyState, ErrorNote, Field, PageHeader, Spinner } from '../components/ui'
+import { Avatar, EmptyState, ErrorNote, Field, PageHeader, SkeletonList } from '../components/ui'
 
 interface Data {
   companies: Company[]
   contacts: Contact[]
+  deals: Deal[]
 }
 
 export function Companies() {
   const { data, loading, error, reload } = useAsyncData<Data>(async () => {
-    const [companies, contacts] = await Promise.all([listCompanies(), listContacts()])
-    return { companies, contacts }
+    const [companies, contacts, deals] = await Promise.all([
+      listCompanies(),
+      listContacts(),
+      listDeals(),
+    ])
+    return { companies, contacts, deals }
   })
 
+  const { toast, confirm } = useFeedback()
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<Company | 'new' | null>(null)
 
-  const contactCounts = useMemo(() => {
-    const counts = new Map<string, number>()
+  const stats = useMemo(() => {
+    const map = new Map<string, { contacts: number; pipeline: number }>()
+    data?.companies.forEach((c) => map.set(c.id, { contacts: 0, pipeline: 0 }))
     data?.contacts.forEach((c) => {
-      if (c.company_id) counts.set(c.company_id, (counts.get(c.company_id) ?? 0) + 1)
+      if (c.company_id && map.has(c.company_id)) map.get(c.company_id)!.contacts += 1
     })
-    return counts
+    data?.deals.forEach((d) => {
+      if (d.company_id && map.has(d.company_id) && OPEN_STAGES.includes(d.stage)) {
+        map.get(d.company_id)!.pipeline += Number(d.value)
+      }
+    })
+    return map
   }, [data])
 
   const visible = useMemo(() => {
@@ -46,14 +61,20 @@ export function Companies() {
   }, [data, search])
 
   async function onDelete(company: Company) {
-    if (
-      !confirm(
-        `Delete ${company.name}? Contacts and deals stay, but lose their link to this company.`,
-      )
-    )
-      return
-    await deleteCompany(company.id)
-    reload()
+    const ok = await confirm({
+      title: `Delete ${company.name}?`,
+      message: 'Contacts and deals stay, but lose their link to this company.',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })
+    if (!ok) return
+    try {
+      await deleteCompany(company.id)
+      reload()
+      toast('Company deleted.')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not delete.', 'error')
+    }
   }
 
   return (
@@ -71,11 +92,11 @@ export function Companies() {
       {error && <ErrorNote message={error} />}
 
       {loading ? (
-        <Spinner />
+        <SkeletonList />
       ) : data && data.companies.length === 0 ? (
         <EmptyState
           title="No companies yet"
-          description="Group your contacts and deals under the organisations they belong to."
+          description="Group contacts and deals under the organisations they belong to."
           action={
             <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
               New company
@@ -83,77 +104,126 @@ export function Companies() {
           }
         />
       ) : (
-        <div className="card overflow-hidden">
-          <div className="border-b border-slate-200 p-3">
-            <input
-              className="input max-w-xs"
-              placeholder="Search companies…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+        <>
+          <input
+            className="input mb-4 sm:max-w-xs"
+            placeholder="Search companies…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+
+          {/* Mobile cards */}
+          <div className="grid gap-2 md:hidden">
+            {visible.map((company) => {
+              const s = stats.get(company.id)
+              return (
+                <div key={company.id} className="rowcard">
+                  <div className="flex items-start gap-3">
+                    <Avatar initials={company.name.slice(0, 2).toUpperCase()} seed={company.id} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-ink truncate text-sm font-medium">{company.name}</p>
+                      <p className="text-subtle truncate text-xs">{company.industry ?? '—'}</p>
+                    </div>
+                  </div>
+                  <div className="text-muted mt-3 flex items-center gap-4 text-xs">
+                    <span>{s?.contacts ?? 0} contacts</span>
+                    <span>{formatCurrency(s?.pipeline ?? 0)} open</span>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary flex-1 py-1.5"
+                      onClick={() => setEditing(company)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-danger py-1.5"
+                      onClick={() => void onDelete(company)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[42rem]">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="th">Company</th>
-                  <th className="th">Industry</th>
-                  <th className="th">Phone</th>
-                  <th className="th">Contacts</th>
-                  <th className="th" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {visible.map((company) => (
-                  <tr key={company.id} className="hover:bg-slate-50">
-                    <td className="td">
-                      <p className="font-medium text-slate-900">{company.name}</p>
-                      {company.domain && (
-                        <a
-                          className="text-xs text-indigo-600 hover:underline"
-                          href={`https://${company.domain}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {company.domain}
-                        </a>
-                      )}
-                    </td>
-                    <td className="td">{company.industry ?? '—'}</td>
-                    <td className="td">{company.phone ?? '—'}</td>
-                    <td className="td">{contactCounts.get(company.id) ?? 0}</td>
-                    <td className="td">
-                      <div className="flex justify-end gap-1">
-                        <button
-                          type="button"
-                          className="btn-ghost px-2 py-1"
-                          onClick={() => setEditing(company)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-ghost px-2 py-1 text-red-600 hover:bg-red-50"
-                          onClick={() => void onDelete(company)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {visible.length === 0 && (
+          {/* Desktop table */}
+          <div className="card hidden overflow-hidden md:block">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-canvas">
                   <tr>
-                    <td className="td text-center text-slate-500" colSpan={5}>
-                      No companies match “{search}”.
-                    </td>
+                    <th className="th">Company</th>
+                    <th className="th">Industry</th>
+                    <th className="th">Phone</th>
+                    <th className="th">Contacts</th>
+                    <th className="th">Open pipeline</th>
+                    <th className="th" />
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-line divide-y">
+                  {visible.map((company) => {
+                    const s = stats.get(company.id)
+                    return (
+                      <tr key={company.id} className="hover:bg-canvas transition-colors">
+                        <td className="td">
+                          <div className="flex items-center gap-3">
+                            <Avatar
+                              initials={company.name.slice(0, 2).toUpperCase()}
+                              seed={company.id}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-ink truncate font-medium">{company.name}</p>
+                              {company.domain && (
+                                <a
+                                  className="text-brand text-xs hover:underline"
+                                  href={`https://${company.domain}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {company.domain}
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="td">{company.industry ?? '—'}</td>
+                        <td className="td">{company.phone ?? '—'}</td>
+                        <td className="td">{s?.contacts ?? 0}</td>
+                        <td className="td font-medium">{formatCurrency(s?.pipeline ?? 0)}</td>
+                        <td className="td">
+                          <div className="flex justify-end gap-1">
+                            <button
+                              type="button"
+                              className="btn-ghost px-2 py-1"
+                              onClick={() => setEditing(company)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-ghost text-danger px-2 py-1"
+                              onClick={() => void onDelete(company)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+
+          {visible.length === 0 && (
+            <p className="text-muted py-10 text-center text-sm">No companies match “{search}”.</p>
+          )}
+        </>
       )}
 
       {editing && (
@@ -163,6 +233,7 @@ export function Companies() {
           onSaved={() => {
             setEditing(null)
             reload()
+            toast('Company saved.')
           }}
         />
       )}
@@ -203,7 +274,6 @@ function CompanyForm({
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the company.')
-    } finally {
       setBusy(false)
     }
   }
@@ -255,7 +325,12 @@ function CompanyForm({
         </div>
 
         <Field label="Phone">
-          <input className="input" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+          <input
+            type="tel"
+            className="input"
+            value={form.phone}
+            onChange={(e) => set('phone', e.target.value)}
+          />
         </Field>
 
         <Field label="Address">

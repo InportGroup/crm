@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { listActivities, listContacts, listDeals, listTasks } from '../lib/api'
 import { useAsyncData } from '../hooks/useAsyncData'
+import { useAuth } from '../context/auth'
 import { formatCurrency, formatDate, formatDateTime, fullName, isOverdue } from '../lib/format'
 import {
   DEAL_STAGES,
@@ -21,6 +22,7 @@ interface Data {
 }
 
 export function Dashboard() {
+  const { user } = useAuth()
   const { data, loading, error } = useAsyncData<Data>(async () => {
     const [contacts, deals, tasks, activities] = await Promise.all([
       listContacts(),
@@ -72,15 +74,25 @@ export function Dashboard() {
     return map
   }, [data])
 
+  const greeting = useMemo(() => {
+    const h = new Date().getHours()
+    return h < 12 ? 'Good morning' : h < 19 ? 'Good afternoon' : 'Good evening'
+  }, [])
+
   if (loading) return <Spinner />
+
+  const firstName = user?.user_metadata?.full_name?.split(' ')[0] ?? user?.email?.split('@')[0]
 
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Where things stand right now" />
+      <PageHeader
+        title={`${greeting}${firstName ? `, ${firstName}` : ''}`}
+        subtitle="Where things stand right now"
+      />
 
       {error && <ErrorNote message={error} />}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Stat label="Contacts" value={String(stats.contacts)} to="/contacts" />
         <Stat
           label="Open pipeline"
@@ -98,27 +110,27 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <section className="card p-5">
-          <h2 className="text-sm font-semibold text-slate-900">Pipeline by stage</h2>
+          <h2 className="text-ink text-sm font-semibold">Pipeline by stage</h2>
           <ul className="mt-4 space-y-3">
             {stageTotals.map((stage) => (
               <li key={stage.id}>
                 <div className="flex items-baseline justify-between text-sm">
-                  <span className="text-slate-600">
+                  <span className="text-muted">
                     {stage.label}
-                    <span className="ml-1.5 text-xs text-slate-400">{stage.count}</span>
+                    <span className="text-subtle ml-1.5 text-xs">{stage.count}</span>
                   </span>
-                  <span className="font-medium text-slate-800">{formatCurrency(stage.value)}</span>
+                  <span className="text-ink font-medium">{formatCurrency(stage.value)}</span>
                 </div>
-                <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div className="bg-neutral-soft mt-1.5 h-2 overflow-hidden rounded-full">
                   <div
-                    className={`h-full rounded-full ${
+                    className={`h-full rounded-full transition-all duration-500 ${
                       stage.id === 'won'
-                        ? 'bg-emerald-500'
+                        ? 'bg-ok-ink'
                         : stage.id === 'lost'
-                          ? 'bg-red-400'
-                          : 'bg-indigo-500'
+                          ? 'bg-danger'
+                          : 'bg-brand'
                     }`}
                     style={{ width: `${(stage.value / maxStageValue) * 100}%` }}
                   />
@@ -130,23 +142,23 @@ export function Dashboard() {
 
         <section className="card p-5">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">Next up</h2>
-            <Link to="/tasks" className="text-sm font-medium text-indigo-600 hover:underline">
+            <h2 className="text-ink text-sm font-semibold">Next up</h2>
+            <Link to="/tasks" className="text-brand text-sm font-medium hover:underline">
               All tasks
             </Link>
           </div>
 
           {upcoming.length === 0 ? (
-            <p className="mt-4 text-sm text-slate-500">No open tasks. Nice.</p>
+            <p className="text-muted mt-4 text-sm">No open tasks. Nice.</p>
           ) : (
-            <ul className="mt-4 divide-y divide-slate-100">
+            <ul className="divide-line mt-3 divide-y">
               {upcoming.map((task) => (
                 <li key={task.id} className="flex items-center gap-3 py-2.5">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-800">{task.title}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-ink truncate text-sm font-medium">{task.title}</p>
+                    <p className="text-subtle text-xs">
                       {task.due_date ? (
-                        <span className={isOverdue(task.due_date) ? 'font-medium text-red-600' : ''}>
+                        <span className={isOverdue(task.due_date) ? 'text-danger font-medium' : ''}>
                           Due {formatDate(task.due_date)}
                         </span>
                       ) : (
@@ -163,22 +175,23 @@ export function Dashboard() {
         </section>
       </div>
 
-      <section className="card mt-6 p-5">
-        <h2 className="text-sm font-semibold text-slate-900">Recent activity</h2>
+      <section className="card mt-4 p-5">
+        <h2 className="text-ink text-sm font-semibold">Recent activity</h2>
         {(data?.activities.length ?? 0) === 0 ? (
-          <p className="mt-4 text-sm text-slate-500">
-            Nothing logged yet. Calls, emails and notes you record will appear here.
+          <p className="text-muted mt-4 text-sm">
+            Nothing logged yet. Open a contact or deal and log a call, note, email or meeting — the
+            whole team sees it.
           </p>
         ) : (
           <ul className="mt-4 space-y-3">
             {data?.activities.map((activity) => (
               <li key={activity.id} className="flex gap-3">
-                <span className="badge mt-0.5 h-fit bg-slate-100 text-slate-600">
+                <span className="badge bg-neutral-soft text-neutral-ink mt-0.5 h-fit capitalize">
                   {activity.type}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-sm text-slate-700">{activity.body}</p>
-                  <p className="text-xs text-slate-400">{formatDateTime(activity.occurred_at)}</p>
+                  <p className="text-muted text-sm">{activity.body}</p>
+                  <p className="text-subtle text-xs">{formatDateTime(activity.occurred_at)}</p>
                 </div>
               </li>
             ))}
@@ -203,11 +216,11 @@ function Stat({
   to: string
 }) {
   return (
-    <Link to={to} className="card p-5 transition-colors hover:border-indigo-300">
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+    <Link to={to} className="card hover:border-brand/40 p-4 transition-colors sm:p-5">
+      <p className="text-muted text-sm">{label}</p>
+      <p className="text-ink mt-1 text-xl font-semibold tracking-tight sm:text-2xl">{value}</p>
       {hint && (
-        <p className={`mt-1 text-xs ${hintTone === 'danger' ? 'text-red-600' : 'text-slate-400'}`}>
+        <p className={`mt-1 text-xs ${hintTone === 'danger' ? 'text-danger' : 'text-subtle'}`}>
           {hint}
         </p>
       )}

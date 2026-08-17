@@ -9,7 +9,8 @@ import {
   updateTask,
 } from '../lib/api'
 import { useAsyncData } from '../hooks/useAsyncData'
-import { formatDate, fullName, isOverdue } from '../lib/format'
+import { useFeedback } from '../context/feedback'
+import { formatDate, fullName, isOverdue, todayISO } from '../lib/format'
 import { PRIORITIES, type Contact, type Deal, type Priority, type Task } from '../lib/types'
 import { Modal } from '../components/Modal'
 import {
@@ -18,7 +19,7 @@ import {
   Field,
   PageHeader,
   PriorityBadge,
-  Spinner,
+  SkeletonList,
 } from '../components/ui'
 
 interface Data {
@@ -27,7 +28,7 @@ interface Data {
   deals: Deal[]
 }
 
-type Filter = 'open' | 'done' | 'all'
+type Filter = 'open' | 'today' | 'done' | 'all'
 
 export function Tasks() {
   const { data, loading, error, reload } = useAsyncData<Data>(async () => {
@@ -35,9 +36,9 @@ export function Tasks() {
     return { tasks, contacts, deals }
   })
 
+  const { toast, confirm } = useFeedback()
   const [filter, setFilter] = useState<Filter>('open')
   const [editing, setEditing] = useState<Task | 'new' | null>(null)
-  const [toggleError, setToggleError] = useState('')
 
   const contactNames = useMemo(() => {
     const map = new Map<string, string>()
@@ -45,38 +46,73 @@ export function Tasks() {
     return map
   }, [data])
 
+  const counts = useMemo(() => {
+    const tasks = data?.tasks ?? []
+    const today = todayISO()
+    return {
+      open: tasks.filter((t) => !t.completed).length,
+      today: tasks.filter((t) => !t.completed && t.due_date && t.due_date <= today).length,
+      overdue: tasks.filter((t) => !t.completed && isOverdue(t.due_date)).length,
+    }
+  }, [data])
+
   const visible = useMemo(() => {
     const tasks = data?.tasks ?? []
-    if (filter === 'all') return tasks
-    return tasks.filter((t) => (filter === 'done' ? t.completed : !t.completed))
+    const today = todayISO()
+    switch (filter) {
+      case 'open':
+        return tasks.filter((t) => !t.completed)
+      case 'today':
+        return tasks.filter((t) => !t.completed && t.due_date && t.due_date <= today)
+      case 'done':
+        return tasks.filter((t) => t.completed)
+      default:
+        return tasks
+    }
   }, [data, filter])
 
   async function toggle(task: Task) {
-    setToggleError('')
     try {
       await updateTask(task.id, {
         completed: !task.completed,
         completed_at: task.completed ? null : new Date().toISOString(),
       })
       reload()
+      if (!task.completed) toast('Task completed.')
     } catch (err) {
-      setToggleError(err instanceof Error ? err.message : 'Could not update the task.')
+      toast(err instanceof Error ? err.message : 'Could not update the task.', 'error')
     }
   }
 
   async function onDelete(task: Task) {
-    if (!confirm(`Delete “${task.title}”?`)) return
+    const ok = await confirm({
+      title: `Delete “${task.title}”?`,
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })
+    if (!ok) return
     await deleteTask(task.id)
     reload()
+    toast('Task deleted.')
   }
 
-  const openCount = (data?.tasks ?? []).filter((t) => !t.completed).length
+  const FILTERS: { id: Filter; label: string; count?: number }[] = [
+    { id: 'open', label: 'Open', count: counts.open },
+    { id: 'today', label: 'Due', count: counts.today },
+    { id: 'done', label: 'Done' },
+    { id: 'all', label: 'All' },
+  ]
 
   return (
     <>
       <PageHeader
         title="Tasks"
-        subtitle={`${openCount} open`}
+        subtitle={
+          counts.overdue > 0
+            ? `${counts.open} open · ${counts.overdue} overdue`
+            : `${counts.open} open`
+        }
         action={
           <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
             New task
@@ -85,29 +121,33 @@ export function Tasks() {
       />
 
       {error && <ErrorNote message={error} />}
-      {toggleError && <ErrorNote message={toggleError} />}
 
-      <div className="mb-4 inline-flex rounded-lg border border-slate-300 bg-white p-0.5">
-        {(['open', 'done', 'all'] as Filter[]).map((f) => (
+      <div className="border-line bg-surface mb-4 inline-flex rounded-lg border p-0.5">
+        {FILTERS.map((f) => (
           <button
-            key={f}
+            key={f.id}
             type="button"
-            onClick={() => setFilter(f)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
-              filter === f ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+            onClick={() => setFilter(f.id)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              filter === f.id ? 'bg-brand text-white' : 'text-muted hover:text-ink'
             }`}
           >
-            {f}
+            {f.label}
+            {f.count !== undefined && f.count > 0 && (
+              <span className={filter === f.id ? 'ml-1.5 opacity-80' : 'text-subtle ml-1.5'}>
+                {f.count}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <Spinner />
+        <SkeletonList />
       ) : visible.length === 0 ? (
         <EmptyState
           title={filter === 'open' ? 'Nothing on your plate' : 'No tasks here'}
-          description="Follow-ups you add will show up in this list and on the dashboard."
+          description="Follow-ups you add show up here and on the dashboard."
           action={
             <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
               New task
@@ -115,62 +155,66 @@ export function Tasks() {
           }
         />
       ) : (
-        <ul className="card divide-y divide-slate-100">
-          {visible.map((task) => (
-            <li key={task.id} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50">
-              <input
-                type="checkbox"
-                checked={task.completed}
-                onChange={() => void toggle(task)}
-                className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                aria-label={`Mark “${task.title}” as ${task.completed ? 'not done' : 'done'}`}
-              />
-
-              <div className="min-w-0 flex-1">
-                <p
-                  className={`text-sm font-medium ${
-                    task.completed ? 'text-slate-400 line-through' : 'text-slate-900'
+        <ul className="card divide-line divide-y">
+          {visible.map((task) => {
+            const overdue = !task.completed && isOverdue(task.due_date)
+            return (
+              <li key={task.id} className="hover:bg-canvas flex items-start gap-3 px-4 py-3 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => void toggle(task)}
+                  aria-label={`Mark “${task.title}” as ${task.completed ? 'not done' : 'done'}`}
+                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                    task.completed
+                      ? 'border-brand bg-brand text-white'
+                      : 'border-line-strong hover:border-brand'
                   }`}
                 >
-                  {task.title}
-                </p>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                  {task.due_date && (
-                    <span
-                      className={
-                        !task.completed && isOverdue(task.due_date)
-                          ? 'font-medium text-red-600'
-                          : undefined
-                      }
-                    >
-                      Due {formatDate(task.due_date)}
-                    </span>
+                  {task.completed && (
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                      <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.4l2.8 2.8 6.8-6.8a1 1 0 0 1 1.4 0Z" />
+                    </svg>
                   )}
-                  {task.contact_id && <span>{contactNames.get(task.contact_id)}</span>}
-                  {task.description && <span className="truncate">{task.description}</span>}
-                </div>
-              </div>
+                </button>
 
-              <PriorityBadge priority={task.priority} />
-
-              <div className="flex gap-1">
                 <button
                   type="button"
-                  className="btn-ghost px-2 py-1"
                   onClick={() => setEditing(task)}
+                  className="min-w-0 flex-1 text-left"
                 >
-                  Edit
+                  <p
+                    className={`text-sm font-medium ${
+                      task.completed ? 'text-subtle line-through' : 'text-ink'
+                    }`}
+                  >
+                    {task.title}
+                  </p>
+                  <div className="text-subtle mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                    {task.due_date && (
+                      <span className={overdue ? 'text-danger font-medium' : undefined}>
+                        {overdue ? 'Overdue · ' : 'Due '}
+                        {formatDate(task.due_date)}
+                      </span>
+                    )}
+                    {task.contact_id && <span>{contactNames.get(task.contact_id)}</span>}
+                  </div>
                 </button>
+
+                <PriorityBadge priority={task.priority} />
+
                 <button
                   type="button"
-                  className="btn-ghost px-2 py-1 text-red-600 hover:bg-red-50"
                   onClick={() => void onDelete(task)}
+                  aria-label="Delete task"
+                  className="text-subtle hover:text-danger rounded p-1 transition-colors"
                 >
-                  Delete
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                    <path d="M8 3h4a1 1 0 0 1 1 1v1h3v2h-1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7H4V5h3V4a1 1 0 0 1 1-1Zm1 2h2V4H9v1ZM7 7v8h6V7H7Z" />
+                  </svg>
                 </button>
-              </div>
-            </li>
-          ))}
+              </li>
+            )
+          })}
         </ul>
       )}
 
@@ -183,6 +227,7 @@ export function Tasks() {
           onSaved={() => {
             setEditing(null)
             reload()
+            toast('Task saved.')
           }}
         />
       )}
@@ -227,7 +272,6 @@ function TaskForm({
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the task.')
-    } finally {
       setBusy(false)
     }
   }
@@ -284,7 +328,7 @@ function TaskForm({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Contact">
             <select
               className="input"

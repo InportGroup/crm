@@ -5,11 +5,12 @@ interface ModalProps {
   title: string
   onClose: () => void
   children: ReactNode
-  /** Rendered in the sticky footer, right-aligned. */
   footer?: ReactNode
+  /** "sheet" slides up from the bottom on mobile; "side" is a right-hand drawer. */
+  variant?: 'sheet' | 'side'
 }
 
-export function Modal({ open, title, onClose, children, footer }: ModalProps) {
+export function Modal({ open, title, onClose, children, footer, variant = 'sheet' }: ModalProps) {
   useEffect(() => {
     if (!open) return
 
@@ -18,7 +19,6 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
     }
     document.addEventListener('keydown', onKey)
 
-    // Prevent the page behind the modal from scrolling.
     const previous = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
@@ -30,26 +30,38 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
 
   if (!open) return null
 
+  const shell =
+    variant === 'side'
+      ? 'sm:ml-auto sm:h-full sm:max-w-md sm:rounded-none sm:rounded-l-2xl'
+      : 'sm:max-w-lg sm:rounded-2xl'
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4">
+    <div
+      className={`animate-fade fixed inset-0 z-60 flex ${
+        variant === 'side' ? 'items-end sm:items-stretch' : 'items-end sm:items-center'
+      } justify-center sm:p-4`}
+    >
       <button
         type="button"
         aria-label="Close dialog"
-        className="absolute inset-0 h-full w-full cursor-default"
+        className="absolute inset-0 h-full w-full cursor-default bg-slate-950/50 backdrop-blur-[2px]"
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl sm:rounded-2xl"
+        className={`bg-surface animate-in-up relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl shadow-2xl ${shell}`}
       >
-        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+        {/* Grab handle: signals the sheet is dismissable on touch. */}
+        <div className="bg-line-strong mx-auto mt-2.5 h-1 w-9 rounded-full sm:hidden" />
+
+        <header className="border-line flex items-center justify-between border-b px-5 py-3.5">
+          <h2 className="text-ink text-base font-semibold">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="text-subtle hover:bg-neutral-soft hover:text-ink rounded-lg p-1.5 transition-colors"
             aria-label="Close"
           >
             <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
@@ -61,7 +73,7 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
         <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
 
         {footer && (
-          <footer className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
+          <footer className="border-line bg-canvas flex justify-end gap-2 border-t px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             {footer}
           </footer>
         )}

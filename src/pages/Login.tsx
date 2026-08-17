@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail, useAuth } from '../context/auth'
 import { ErrorNote, Field } from '../components/ui'
+import { LogoMark } from '../components/Logo'
 
 type Mode = 'signin' | 'signup' | 'forgot'
 
@@ -67,13 +68,13 @@ export function Login() {
       <form onSubmit={onSubmit} className="card space-y-4 p-6">
         {error && <ErrorNote message={error} />}
         {notice && (
-          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <p className="border-ok-ink/25 bg-ok-soft text-ok-ink rounded-lg border px-3 py-2 text-sm">
             {notice}
           </p>
         )}
 
         {mode === 'forgot' && (
-          <p className="text-sm text-slate-600">
+          <p className="text-muted text-sm">
             Enter your work address and we'll email you a link to choose a new password.
           </p>
         )}
@@ -105,7 +106,7 @@ export function Login() {
           />
         </Field>
 
-        {domainWarning && <p className="-mt-2 text-xs text-amber-700">{domainWarning}</p>}
+        {domainWarning && <p className="text-warn-ink -mt-2 text-xs">{domainWarning}</p>}
 
         {mode !== 'forgot' && (
           <Field label="Password" hint={mode === 'signup' ? 'At least 6 characters.' : undefined}>
@@ -134,14 +135,14 @@ export function Login() {
         {mode === 'signin' && (
           <button
             type="button"
-            className="w-full text-center text-sm font-medium text-indigo-600 hover:underline"
+            className="text-brand w-full text-center text-sm font-medium hover:underline"
             onClick={() => switchTo('forgot')}
           >
             Forgot your password?
           </button>
         )}
 
-        <p className="text-center text-sm text-slate-500">
+        <p className="text-muted text-center text-sm">
           {mode === 'signin' ? (
             <>
               Don't have an account?{' '}
@@ -222,7 +223,7 @@ export function UpdatePassword() {
 
         <button
           type="button"
-          className="w-full text-center text-sm text-slate-500 hover:underline"
+          className="text-muted w-full text-center text-sm hover:underline"
           onClick={() => void signOut()}
         >
           Cancel and sign out
@@ -234,14 +235,19 @@ export function UpdatePassword() {
 
 function AuthShell({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="w-full max-w-sm">
-        <div className="mb-6 flex flex-col items-center gap-2 text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-lg font-bold text-white">
-            C
-          </span>
-          <h1 className="text-xl font-semibold tracking-tight text-slate-900">Clientela CRM</h1>
-          <p className="text-sm text-slate-500">{title}</p>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">
+      {/* Soft brand glow behind the card. */}
+      <div
+        aria-hidden
+        className="bg-brand/20 pointer-events-none absolute -top-32 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full blur-3xl"
+      />
+      <div className="relative w-full max-w-sm">
+        <div className="mb-6 flex flex-col items-center gap-2.5 text-center">
+          <LogoMark size={44} />
+          <h1 className="text-ink text-xl font-semibold tracking-tight">
+            IPG<span className="text-subtle mx-px">-</span>CRM
+          </h1>
+          <p className="text-muted text-sm">{title}</p>
         </div>
         {children}
       </div>
@@ -253,7 +259,7 @@ function LinkButton({ onClick, children }: { onClick: () => void; children: Reac
   return (
     <button
       type="button"
-      className="font-medium text-indigo-600 hover:underline"
+      className="text-brand font-medium hover:underline"
       onClick={onClick}
     >
       {children}

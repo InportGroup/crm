@@ -4,8 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="A lightweight CRM for contacts, companies, deals and follow-ups." />
-    <title>Clientela CRM</title>
+    <meta name="theme-color" content="#4f46e5" />
+    <meta name="description" content="IPG-CRM — contacts, companies, deals and follow-ups for the Inport Group team." />
+    <title>IPG-CRM</title>
+    <script>
+      // Applied before first paint so a dark-mode user never sees a white flash.
+      try {
+        var stored = localStorage.getItem('ipg-crm-theme')
+        var dark = stored ? stored === 'dark'
+          : window.matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
