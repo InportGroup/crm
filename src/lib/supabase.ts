@@ -17,9 +17,12 @@ export const supabase = createClient(
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      // GitHub Pages serves the app under a hash route, so let supabase-js read
-      // the OAuth/magic-link fragment on return.
       detectSessionInUrl: true,
+      // PKCE returns the recovery/confirmation token as a ?code= QUERY param.
+      // The implicit flow would put it in the URL fragment, where it collides
+      // with HashRouter's own "#/route" and gets eaten before supabase-js
+      // can read it. Query params sit before the hash, so both survive.
+      flowType: 'pkce',
     },
   },
 )

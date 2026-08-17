@@ -5,7 +5,7 @@ import { isSupabaseConfigured } from './lib/supabase'
 import { Layout } from './components/Layout'
 import { SetupNotice } from './components/SetupNotice'
 import { Spinner } from './components/ui'
-import { Login } from './pages/Login'
+import { Login, UpdatePassword } from './pages/Login'
 import { Dashboard } from './pages/Dashboard'
 import { Contacts } from './pages/Contacts'
 import { Companies } from './pages/Companies'
@@ -38,15 +38,19 @@ export default function App() {
 }
 
 function RequireAuth() {
-  const { session, loading } = useAuth()
+  const { session, loading, recovery } = useAuth()
   if (loading) return <Spinner label="Checking your session…" />
+  // A recovery session is a real session, so this check must come first or the
+  // user lands in the CRM without ever setting the new password.
+  if (recovery) return <UpdatePassword />
   if (!session) return <Navigate to="/login" replace />
   return <Layout />
 }
 
 function PublicOnly() {
-  const { session, loading } = useAuth()
+  const { session, loading, recovery } = useAuth()
   if (loading) return <Spinner label="Checking your session…" />
+  if (recovery) return <UpdatePassword />
   if (session) return <Navigate to="/" replace />
   return <Login />
 }
