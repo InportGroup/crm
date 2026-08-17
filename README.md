@@ -79,6 +79,22 @@ Three rules follow from this:
 - Any new table you add needs `enable row level security` plus policies, or it is world-readable.
 - Keep the domain trigger in place. It is what makes "all authenticated users" a safe set.
 
+### Invoice documents
+
+Invoices live in a **private** Supabase Storage bucket (`invoices`, 10 MB cap, PDF/JPEG/PNG/HEIC/
+WebP only). `storage.objects` has its own RLS, entirely separate from the `expenses` table, so
+[`supabase/expense-invoices.sql`](supabase/expense-invoices.sql) adds four policies granting access
+to `authenticated` and nothing to anonymous callers.
+
+Because the bucket is private, the app never renders a static file URL — it mints a **signed URL**
+valid for five minutes when you click *View*. A plain public URL would 400.
+
+`expenses.invoice_path` stores the object path, not a URL. Deleting an expense removes its document
+first, so a failure there cannot orphan a file with no row pointing at it.
+
+> Storage rows cannot be deleted with SQL — a `protect_delete` trigger blocks it. Use the Storage
+> API (which is what the app does) or the dashboard.
+
 ### Running the SQL
 
 Apply in this order (all are idempotent):
@@ -89,6 +105,7 @@ Apply in this order (all are idempotent):
 | [`supabase/domain-restriction.sql`](supabase/domain-restriction.sql)   | Limit sign-up to `@inportgroup.com`         |
 | [`supabase/shared-workspace.sql`](supabase/shared-workspace.sql)       | Swap owner-scoped RLS for shared-team RLS   |
 | [`supabase/expenses-and-vault.sql`](supabase/expenses-and-vault.sql) | Expenses + password vault tables and RLS    |
+| [`supabase/expense-invoices.sql`](supabase/expense-invoices.sql)     | Invoice columns, paid_by, invoices bucket    |
 | [`supabase/seed.sql`](supabase/seed.sql)                               | Optional demo data                          |
 
 ## Local setup
@@ -173,8 +190,11 @@ Without these, the emailed link bounces to Supabase's default and the user never
   plus weighted-pipeline and win-rate figures.
 - **Tasks** — open / due / done filters, overdue highlighting, one-tap completion.
 - **Expenses** (Internal) — internal spend with category, vendor, payment method and an approval
-  workflow (pending → approved → reimbursed / rejected). Month / pending / to-reimburse totals and
-  a category breakdown. Optionally linked to a company or deal when spend is billable.
+  workflow (pending → approved → reimbursed / rejected). Records **who paid** (picked from
+  teammates who have signed in) and attaches the **invoice** — a reference number plus the PDF or
+  photo itself. Month / pending / to-reimburse totals, a category breakdown, and an "Owed to"
+  panel showing unreimbursed spend per person. Optionally linked to a company or deal when spend
+  is billable.
 - **Passwords** (Internal) — shared credential store with masked secrets, reveal toggle,
   copy-to-clipboard and a strong password generator. **See the warning below.**
 - **Activity log** — calls, notes, emails and meetings against any contact or deal.

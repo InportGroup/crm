@@ -1,5 +1,14 @@
 import { supabase } from './supabase'
-import type { Activity, Company, Contact, Deal, Expense, Task, VaultEntry } from './types'
+import type {
+  Activity,
+  Company,
+  Contact,
+  Deal,
+  Expense,
+  Profile,
+  Task,
+  VaultEntry,
+} from './types'
 
 /** Turns a PostgrestError into a thrown Error so callers can use try/catch. */
 async function rows<T>(
@@ -97,10 +106,61 @@ export const listExpenses = () =>
 export const createExpense = (values: Partial<Expense>) =>
   run(supabase.from('expenses').insert(values))
 
+/** Insert returning the new row, so an invoice can be uploaded under its id. */
+export async function createExpenseReturning(values: Partial<Expense>): Promise<Expense> {
+  const { data, error } = await supabase.from('expenses').insert(values).select().single()
+  if (error) throw new Error(error.message)
+  return data as Expense
+}
+
 export const updateExpense = (id: string, values: Partial<Expense>) =>
   run(supabase.from('expenses').update(values).eq('id', id))
 
 export const deleteExpense = (id: string) => run(supabase.from('expenses').delete().eq('id', id))
+
+// -- profiles ----------------------------------------------------------------
+
+/** Teammates who have signed in at least once; populated by a trigger on sign-up. */
+export const listProfiles = () =>
+  rows<Profile>(supabase.from('profiles').select('*').order('full_name'))
+
+// -- invoice documents -------------------------------------------------------
+
+const INVOICE_BUCKET = 'invoices'
+
+/**
+ * Uploads an invoice and returns its storage path. Files are namespaced by
+ * expense id so one expense's documents never collide with another's.
+ */
+export async function uploadInvoice(expenseId: string, file: File): Promise<string> {
+  // Keep the extension so signed URLs download with a sensible filename.
+  const ext = file.name.includes('.') ? file.name.split('.').pop() : 'bin'
+  const path = `${expenseId}/${Date.now()}.${ext}`
+
+  const { error } = await supabase.storage.from(INVOICE_BUCKET).upload(path, file, {
+    contentType: file.type || undefined,
+    upsert: false,
+  })
+  if (error) throw new Error(error.message)
+  return path
+}
+
+/**
+ * Mints a short-lived signed URL. The bucket is private, so this is the only
+ * way to view a document — a plain public URL would 400.
+ */
+export async function getInvoiceUrl(path: string, expiresInSeconds = 300): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(INVOICE_BUCKET)
+    .createSignedUrl(path, expiresInSeconds)
+  if (error) throw new Error(error.message)
+  return data.signedUrl
+}
+
+export async function removeInvoice(path: string): Promise<void> {
+  const { error } = await supabase.storage.from(INVOICE_BUCKET).remove([path])
+  if (error) throw new Error(error.message)
+}
 
 // -- vault -------------------------------------------------------------------
 

@@ -103,7 +103,22 @@ export interface Expense {
   vendor: string | null
   payment_method: PaymentMethod
   status: ExpenseStatus
+  invoice_number: string | null
+  /** Path inside the private `invoices` bucket, not a public URL. */
+  invoice_path: string | null
+  /** Original filename, for display and download. */
+  invoice_name: string | null
+  /** profiles.id of whoever actually paid. */
+  paid_by: string | null
   notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Profile {
+  id: string
+  full_name: string | null
+  avatar_url: string | null
   created_at: string
   updated_at: string
 }

@@ -1,15 +1,20 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
-  createExpense,
+  createExpenseReturning,
   deleteExpense,
+  getInvoiceUrl,
   listCompanies,
   listDeals,
   listExpenses,
+  listProfiles,
   nullifyBlanks,
+  removeInvoice,
   updateExpense,
+  uploadInvoice,
 } from '../lib/api'
 import { useAsyncData } from '../hooks/useAsyncData'
 import { useFeedback } from '../context/feedback'
+import { useAuth } from '../context/auth'
 import { formatCurrency, formatDate, todayISO } from '../lib/format'
 import {
   EXPENSE_CATEGORIES,
@@ -21,6 +26,7 @@ import {
   type ExpenseCategory,
   type ExpenseStatus,
   type PaymentMethod,
+  type Profile,
 } from '../lib/types'
 import { Modal } from '../components/Modal'
 import { EmptyState, ErrorNote, Field, PageHeader, SkeletonList } from '../components/ui'
@@ -29,6 +35,7 @@ interface Data {
   expenses: Expense[]
   companies: Company[]
   deals: Deal[]
+  profiles: Profile[]
 }
 
 const STATUS_STYLES: Record<ExpenseStatus, string> = {
@@ -53,15 +60,17 @@ const CATEGORY_ICONS: Record<ExpenseCategory, string> = {
 
 export function Expenses() {
   const { data, loading, error, reload } = useAsyncData<Data>(async () => {
-    const [expenses, companies, deals] = await Promise.all([
+    const [expenses, companies, deals, profiles] = await Promise.all([
       listExpenses(),
       listCompanies(),
       listDeals(),
+      listProfiles(),
     ])
-    return { expenses, companies, deals }
+    return { expenses, companies, deals, profiles }
   })
 
   const { toast, confirm } = useFeedback()
+  const { user } = useAuth()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<ExpenseStatus | 'all'>('all')
   const [editing, setEditing] = useState<Expense | 'new' | null>(null)
@@ -69,6 +78,12 @@ export function Expenses() {
   const companyNames = useMemo(() => {
     const map = new Map<string, string>()
     data?.companies.forEach((c) => map.set(c.id, c.name))
+    return map
+  }, [data])
+
+  const payerNames = useMemo(() => {
+    const map = new Map<string, string>()
+    data?.profiles.forEach((p) => map.set(p.id, p.full_name ?? 'Unnamed'))
     return map
   }, [data])
 
@@ -105,6 +120,15 @@ export function Expenses() {
 
   const maxCategory = Math.max(1, ...byCategory.map(([, v]) => v))
 
+  /** Who is owed what: unreimbursed spend grouped by payer. */
+  const byPayer = useMemo(() => {
+    const map = new Map<string, number>()
+    ;(data?.expenses ?? [])
+      .filter((e) => e.paid_by && e.status !== 'reimbursed' && e.status !== 'rejected')
+      .forEach((e) => map.set(e.paid_by!, (map.get(e.paid_by!) ?? 0) + Number(e.amount)))
+    return [...map.entries()].sort((a, b) => b[1] - a[1])
+  }, [data])
+
   async function setStatus(expense: Expense, status: ExpenseStatus) {
     try {
       await updateExpense(expense.id, { status })
@@ -118,14 +142,23 @@ export function Expenses() {
   async function onDelete(expense: Expense) {
     const ok = await confirm({
       title: 'Delete this expense?',
-      message: `“${expense.description}” will be removed for everyone.`,
+      message: expense.invoice_path
+        ? `“${expense.description}” and its attached invoice will be removed for everyone.`
+        : `“${expense.description}” will be removed for everyone.`,
       confirmLabel: 'Delete',
       tone: 'danger',
     })
     if (!ok) return
-    await deleteExpense(expense.id)
-    reload()
-    toast('Expense deleted.')
+    try {
+      // Remove the document first; a failure here would otherwise orphan the
+      // file in storage with no row left pointing at it.
+      if (expense.invoice_path) await removeInvoice(expense.invoice_path)
+      await deleteExpense(expense.id)
+      reload()
+      toast('Expense deleted.')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not delete.', 'error')
+    }
   }
 
   return (
@@ -188,26 +221,47 @@ export function Expenses() {
             </div>
           </div>
 
-          {byCategory.length > 1 && (
-            <section className="card mb-4 p-5">
-              <h2 className="text-ink text-sm font-semibold">By category</h2>
-              <ul className="mt-3 space-y-2.5">
-                {byCategory.map(([cat, value]) => (
-                  <li key={cat}>
-                    <div className="flex items-baseline justify-between text-sm">
-                      <span className="text-muted capitalize">{cat}</span>
-                      <span className="text-ink font-medium">{formatCurrency(value)}</span>
-                    </div>
-                    <div className="bg-neutral-soft mt-1.5 h-2 overflow-hidden rounded-full">
-                      <div
-                        className="bg-brand h-full rounded-full transition-all duration-500"
-                        style={{ width: `${(value / maxCategory) * 100}%` }}
-                      />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
+          {(byCategory.length > 1 || byPayer.length > 0) && (
+            <div className="mb-4 grid gap-4 lg:grid-cols-2">
+              {byCategory.length > 1 && (
+                <section className="card p-5">
+                  <h2 className="text-ink text-sm font-semibold">By category</h2>
+                  <ul className="mt-3 space-y-2.5">
+                    {byCategory.map(([cat, value]) => (
+                      <li key={cat}>
+                        <div className="flex items-baseline justify-between text-sm">
+                          <span className="text-muted capitalize">{cat}</span>
+                          <span className="text-ink font-medium">{formatCurrency(value)}</span>
+                        </div>
+                        <div className="bg-neutral-soft mt-1.5 h-2 overflow-hidden rounded-full">
+                          <div
+                            className="bg-brand h-full rounded-full transition-all duration-500"
+                            style={{ width: `${(value / maxCategory) * 100}%` }}
+                          />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {byPayer.length > 0 && (
+                <section className="card p-5">
+                  <h2 className="text-ink text-sm font-semibold">Owed to</h2>
+                  <p className="text-subtle mt-0.5 text-xs">
+                    Spend not yet reimbursed, by whoever paid
+                  </p>
+                  <ul className="divide-line mt-3 divide-y">
+                    {byPayer.map(([id, value]) => (
+                      <li key={id} className="flex items-center justify-between py-2 text-sm">
+                        <span className="text-muted">{payerNames.get(id) ?? 'Unknown'}</span>
+                        <span className="text-ink font-medium">{formatCurrency(value)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
           )}
 
           {/* Mobile cards */}
@@ -225,6 +279,17 @@ export function Expenses() {
                     <p className="text-subtle truncate text-xs capitalize">
                       {expense.category} · {formatDate(expense.spent_on)}
                     </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      {expense.paid_by && (
+                        <span className="text-muted text-xs">
+                          Paid by {payerNames.get(expense.paid_by) ?? '—'}
+                        </span>
+                      )}
+                      {expense.invoice_number && (
+                        <span className="text-subtle text-xs">#{expense.invoice_number}</span>
+                      )}
+                      <InvoiceLink expense={expense} />
+                    </div>
                   </div>
                   <div className="text-right">
                     <p className="text-ink text-sm font-semibold">
@@ -262,9 +327,9 @@ export function Expenses() {
                 <thead className="bg-canvas">
                   <tr>
                     <th className="th">Description</th>
-                    <th className="th">Category</th>
+                    <th className="th">Paid by</th>
                     <th className="th">Date</th>
-                    <th className="th">Vendor</th>
+                    <th className="th">Invoice</th>
                     <th className="th text-right">Amount</th>
                     <th className="th">Status</th>
                     <th className="th" />
@@ -275,15 +340,26 @@ export function Expenses() {
                     <tr key={expense.id} className="hover:bg-canvas transition-colors">
                       <td className="td">
                         <p className="text-ink font-medium">{expense.description}</p>
-                        {expense.company_id && (
-                          <p className="text-subtle text-xs">
-                            {companyNames.get(expense.company_id)}
-                          </p>
+                        <p className="text-subtle text-xs capitalize">
+                          {[
+                            expense.category,
+                            expense.vendor,
+                            expense.company_id && companyNames.get(expense.company_id),
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                      </td>
+                      <td className="td">
+                        {expense.paid_by ? (payerNames.get(expense.paid_by) ?? '—') : '—'}
+                      </td>
+                      <td className="td">{formatDate(expense.spent_on)}</td>
+                      <td className="td">
+                        <InvoiceLink expense={expense} />
+                        {expense.invoice_number && (
+                          <p className="text-subtle text-xs">#{expense.invoice_number}</p>
                         )}
                       </td>
-                      <td className="td capitalize">{expense.category}</td>
-                      <td className="td">{formatDate(expense.spent_on)}</td>
-                      <td className="td">{expense.vendor ?? '—'}</td>
                       <td className="td text-ink text-right font-medium">
                         {formatCurrency(Number(expense.amount), expense.currency)}
                       </td>
@@ -338,15 +414,55 @@ export function Expenses() {
           expense={editing === 'new' ? null : editing}
           companies={data?.companies ?? []}
           deals={data?.deals ?? []}
+          profiles={data?.profiles ?? []}
+          currentUserId={user?.id ?? null}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onSaved={(message) => {
             setEditing(null)
             reload()
-            toast('Expense saved.')
+            toast(message)
           }}
         />
       )}
     </>
+  )
+}
+
+/**
+ * Opens an invoice in a new tab. The bucket is private, so the URL has to be
+ * signed at click time rather than rendered into the page as a static href.
+ */
+function InvoiceLink({ expense }: { expense: Expense }) {
+  const { toast } = useFeedback()
+  const [busy, setBusy] = useState(false)
+
+  if (!expense.invoice_path) return <span className="text-subtle text-xs">—</span>
+
+  async function open() {
+    setBusy(true)
+    try {
+      const url = await getInvoiceUrl(expense.invoice_path!)
+      window.open(url, '_blank', 'noopener')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not open the invoice.', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void open()}
+      disabled={busy}
+      className="text-brand inline-flex items-center gap-1 text-xs hover:underline disabled:opacity-50"
+      title={expense.invoice_name ?? 'View invoice'}
+    >
+      <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0">
+        <path d="M4 3h7l4 4v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm7 1.5V7h2.5L11 4.5ZM6 9h8v1.5H6V9Zm0 3h8v1.5H6V12Z" />
+      </svg>
+      {busy ? 'Opening…' : 'View'}
+    </button>
   )
 }
 
@@ -395,18 +511,25 @@ function Chip({
   )
 }
 
+const MAX_INVOICE_BYTES = 10 * 1024 * 1024
+const ACCEPTED_INVOICE = 'application/pdf,image/jpeg,image/png,image/heic,image/webp'
+
 function ExpenseForm({
   expense,
   companies,
   deals,
+  profiles,
+  currentUserId,
   onClose,
   onSaved,
 }: {
   expense: Expense | null
   companies: Company[]
   deals: Deal[]
+  profiles: Profile[]
+  currentUserId: string | null
   onClose: () => void
-  onSaved: () => void
+  onSaved: (message: string) => void
 }) {
   const [form, setForm] = useState({
     description: expense?.description ?? '',
@@ -417,24 +540,80 @@ function ExpenseForm({
     vendor: expense?.vendor ?? '',
     payment_method: expense?.payment_method ?? ('card' as PaymentMethod),
     status: expense?.status ?? ('pending' as ExpenseStatus),
+    invoice_number: expense?.invoice_number ?? '',
+    // Default to whoever is filling the form in — the common case.
+    paid_by: expense?.paid_by ?? currentUserId ?? '',
     company_id: expense?.company_id ?? '',
     deal_id: expense?.deal_id ?? '',
     notes: expense?.notes ?? '',
   })
+  const [file, setFile] = useState<File | null>(null)
+  const [removeExisting, setRemoveExisting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const set = (key: keyof typeof form, value: string) => setForm((f) => ({ ...f, [key]: value }))
 
+  function onPickFile(picked: File | null) {
+    setError('')
+    if (picked && picked.size > MAX_INVOICE_BYTES) {
+      setError(`That file is ${(picked.size / 1024 / 1024).toFixed(1)} MB. The limit is 10 MB.`)
+      return
+    }
+    setFile(picked)
+    if (picked) setRemoveExisting(false)
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError('')
+
     try {
-      const values = nullifyBlanks({ ...form, amount: Number(form.amount || 0) })
-      if (expense) await updateExpense(expense.id, values)
-      else await createExpense(values)
-      onSaved()
+      const base = nullifyBlanks({ ...form, amount: Number(form.amount || 0) })
+
+      if (expense) {
+        let invoicePath = expense.invoice_path
+        let invoiceName = expense.invoice_name
+
+        if (removeExisting && expense.invoice_path) {
+          await removeInvoice(expense.invoice_path)
+          invoicePath = null
+          invoiceName = null
+        }
+        if (file) {
+          // Replace: drop the old object so storage does not accumulate orphans.
+          if (invoicePath) await removeInvoice(invoicePath)
+          invoicePath = await uploadInvoice(expense.id, file)
+          invoiceName = file.name
+        }
+
+        await updateExpense(expense.id, {
+          ...base,
+          invoice_path: invoicePath,
+          invoice_name: invoiceName,
+        })
+        onSaved('Expense saved.')
+      } else {
+        // The upload path is namespaced by expense id, so the row must exist
+        // first. If the upload then fails, the expense is still saved and the
+        // user is told the invoice specifically did not attach.
+        const created = await createExpenseReturning(base)
+        if (file) {
+          try {
+            const path = await uploadInvoice(created.id, file)
+            await updateExpense(created.id, { invoice_path: path, invoice_name: file.name })
+          } catch (uploadErr) {
+            onSaved(
+              `Expense saved, but the invoice did not upload: ${
+                uploadErr instanceof Error ? uploadErr.message : 'unknown error'
+              }`,
+            )
+            return
+          }
+        }
+        onSaved('Expense saved.')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the expense.')
       setBusy(false)
@@ -559,6 +738,91 @@ function ExpenseForm({
             </select>
           </Field>
         </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field
+            label="Paid by"
+            hint={
+              profiles.length <= 1
+                ? 'Teammates appear here once they have signed in.'
+                : undefined
+            }
+          >
+            <select
+              className="input"
+              value={form.paid_by}
+              onChange={(e) => set('paid_by', e.target.value)}
+            >
+              <option value="">— Not recorded —</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.full_name ?? 'Unnamed'}
+                  {p.id === currentUserId ? ' (you)' : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Invoice number">
+            <input
+              className="input"
+              value={form.invoice_number}
+              onChange={(e) => set('invoice_number', e.target.value)}
+              placeholder="INV-2026-0134"
+            />
+          </Field>
+        </div>
+
+        <Field label="Invoice document" hint="PDF or photo, up to 10 MB.">
+          <div className="space-y-2">
+            {/* Existing attachment, when editing */}
+            {expense?.invoice_path && !file && !removeExisting && (
+              <div className="border-line bg-canvas flex items-center gap-2 rounded-lg border px-3 py-2">
+                <svg viewBox="0 0 20 20" fill="currentColor" className="text-brand h-4 w-4 shrink-0">
+                  <path d="M4 3h7l4 4v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm7 1.5V7h2.5L11 4.5Z" />
+                </svg>
+                <span className="text-ink min-w-0 flex-1 truncate text-sm">
+                  {expense.invoice_name ?? 'Attached invoice'}
+                </span>
+                <button
+                  type="button"
+                  className="text-danger shrink-0 text-xs hover:underline"
+                  onClick={() => setRemoveExisting(true)}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {removeExisting && (
+              <div className="border-line bg-canvas flex items-center gap-2 rounded-lg border px-3 py-2">
+                <span className="text-muted min-w-0 flex-1 text-sm">
+                  Invoice will be removed when you save.
+                </span>
+                <button
+                  type="button"
+                  className="text-brand shrink-0 text-xs hover:underline"
+                  onClick={() => setRemoveExisting(false)}
+                >
+                  Keep
+                </button>
+              </div>
+            )}
+
+            <input
+              type="file"
+              accept={ACCEPTED_INVOICE}
+              onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+              className="text-muted file:bg-brand-soft file:text-brand-ink hover:file:bg-brand/20 w-full text-sm file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:px-3 file:py-2 file:text-sm file:font-medium"
+            />
+
+            {file && (
+              <p className="text-ok-ink text-xs">
+                {file.name} ({(file.size / 1024).toFixed(0)} KB) will be
+                {expense?.invoice_path ? ' uploaded, replacing the current file.' : ' uploaded.'}
+              </p>
+            )}
+          </div>
+        </Field>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Company" hint="Optional — if billable to a client.">
