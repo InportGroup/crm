@@ -12,12 +12,14 @@ import {
   todayISO,
 } from '../lib/format'
 import {
+  CATEGORY_LABELS,
   DEAL_STAGES,
   OPEN_STAGES,
   type Activity,
   type Contact,
   type Deal,
   type Expense,
+  type ExpenseCategory,
   type Task,
 } from '../lib/types'
 import { ErrorNote, PageHeader, PriorityBadge, Spinner } from '../components/ui'
@@ -52,6 +54,7 @@ export function Dashboard() {
     // todayISO is timezone-aware; toISOString would be UTC and could land in
     // the wrong month for anyone west of Greenwich late in the evening.
     const month = todayISO().slice(0, 7)
+    const monthly = expenses.filter((e) => e.spent_on.startsWith(month))
 
     return {
       contacts: data?.contacts.length ?? 0,
@@ -60,10 +63,54 @@ export function Dashboard() {
       won: won.reduce((sum, d) => sum + Number(d.value), 0),
       openTasks: tasks.filter((t) => !t.completed).length,
       overdue: tasks.filter((t) => !t.completed && isOverdue(t.due_date)).length,
-      spendThisMonth: expenses
-        .filter((e) => e.spent_on.startsWith(month))
-        .reduce((sum, e) => sum + Number(e.amount), 0),
+      spendThisMonth: monthly.reduce((sum, e) => sum + Number(e.amount), 0),
       pendingExpenses: expenses.filter((e) => e.status === 'pending').length,
+    }
+  }, [data])
+
+  /**
+   * The month's spend split into costs that belong to a project or client and
+   * overhead the company carries either way. Both the gross figure and the
+   * taxable base are kept: the base is what actually lands in the accounts.
+   */
+  const costSplit = useMemo(() => {
+    const monthly = (data?.expenses ?? []).filter((e) => e.spent_on.startsWith(todayISO().slice(0, 7)))
+
+    const bucket = (type: 'direct' | 'structural') => {
+      const rows = monthly.filter((e) => e.cost_type === type)
+      const byCategory = new Map<ExpenseCategory, number>()
+      rows.forEach((e) =>
+        byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + Number(e.amount)),
+      )
+      return {
+        gross: rows.reduce((sum, e) => sum + Number(e.amount), 0),
+        net: rows.reduce((sum, e) => sum + Number(e.net_amount ?? 0), 0),
+        tax: rows.reduce((sum, e) => sum + Number(e.tax_amount ?? 0), 0),
+        count: rows.length,
+        categories: [...byCategory.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5),
+      }
+    }
+
+    const direct = bucket('direct')
+    const structural = bucket('structural')
+    const total = direct.gross + structural.gross
+    return {
+      direct,
+      structural,
+      total,
+      // Share of spend that is billable, the number worth watching month to month.
+      directShare: total > 0 ? Math.round((direct.gross / total) * 100) : 0,
+    }
+  }, [data])
+
+  /** Out-of-pocket spend still waiting to be paid back. */
+  const owed = useMemo(() => {
+    const rows = (data?.expenses ?? []).filter(
+      (e) => e.reimbursable && e.status !== 'reimbursed' && e.status !== 'rejected',
+    )
+    return {
+      total: rows.reduce((sum, e) => sum + Number(e.amount), 0),
+      count: rows.length,
     }
   }, [data])
 
@@ -130,18 +177,65 @@ export function Dashboard() {
           label="Spend this month"
           value={formatCurrency(stats.spendThisMonth)}
           hint={
-            stats.pendingExpenses > 0
-              ? `${stats.pendingExpenses} awaiting approval`
-              : 'nothing pending'
+            owed.count > 0
+              ? `${formatCurrency(owed.total)} to reimburse`
+              : stats.pendingExpenses > 0
+                ? `${stats.pendingExpenses} awaiting approval`
+                : 'nothing pending'
           }
-          hintTone={stats.pendingExpenses > 0 ? 'warn' : 'muted'}
+          hintTone={owed.count > 0 || stats.pendingExpenses > 0 ? 'warn' : 'muted'}
           to="/expenses"
           // Full width on phones (odd tile in a 2-column grid), one column on xl.
           className="col-span-2 xl:col-span-1"
         />
       </div>
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+      {costSplit.total > 0 && (
+        <section className="card mt-4 p-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2 className="text-ink text-sm font-semibold">Cost structure this month</h2>
+              <p className="text-subtle mt-0.5 text-xs">
+                Direct costs sit against a project or client; structural costs are overhead
+              </p>
+            </div>
+            <Link to="/expenses" className="text-brand text-sm font-medium hover:underline">
+              All expenses
+            </Link>
+          </div>
+
+          {/* One bar showing the balance between the two, before the detail. */}
+          <div className="bg-neutral-soft mt-4 flex h-2.5 overflow-hidden rounded-full">
+            <div
+              className="bg-brand h-full transition-all duration-500"
+              style={{ width: `${costSplit.directShare}%` }}
+            />
+            <div
+              className="bg-info-ink h-full transition-all duration-500"
+              style={{ width: `${100 - costSplit.directShare}%` }}
+            />
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <CostBucket
+              label="Direct costs"
+              hint="Billable to a project or client"
+              accent="bg-brand"
+              share={costSplit.directShare}
+              bucket={costSplit.direct}
+            />
+            <CostBucket
+              label="Structural costs"
+              hint="General running costs"
+              accent="bg-info-ink"
+              share={100 - costSplit.directShare}
+              bucket={costSplit.structural}
+            />
+          </div>
+        </section>
+      )}
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <section className="card p-5">
           <h2 className="text-ink text-sm font-semibold">Pipeline by stage</h2>
           <ul className="mt-4 space-y-3">
@@ -230,6 +324,66 @@ export function Dashboard() {
         )}
       </section>
     </>
+  )
+}
+
+function CostBucket({
+  label,
+  hint,
+  accent,
+  share,
+  bucket,
+}: {
+  label: string
+  hint: string
+  accent: string
+  share: number
+  bucket: {
+    gross: number
+    net: number
+    tax: number
+    count: number
+    categories: [ExpenseCategory, number][]
+  }
+}) {
+  const max = Math.max(1, ...bucket.categories.map(([, v]) => v))
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <span className="text-muted flex items-center gap-2 text-sm">
+          <span className={`h-2.5 w-2.5 rounded-full ${accent}`} />
+          {label}
+        </span>
+        <span className="text-ink font-semibold">{formatCurrency(bucket.gross)}</span>
+      </div>
+      <p className="text-subtle mt-0.5 text-xs">
+        {hint} · {share}% of spend
+      </p>
+      <p className="text-subtle mt-1 text-xs">
+        Base {formatCurrency(bucket.net)} · VAT {formatCurrency(bucket.tax)} · {bucket.count}{' '}
+        {bucket.count === 1 ? 'expense' : 'expenses'}
+      </p>
+
+      {bucket.categories.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {bucket.categories.map(([category, value]) => (
+            <li key={category}>
+              <div className="flex items-baseline justify-between text-xs">
+                <span className="text-muted">{CATEGORY_LABELS[category] ?? category}</span>
+                <span className="text-ink font-medium">{formatCurrency(value)}</span>
+              </div>
+              <div className="bg-neutral-soft mt-1 h-1.5 overflow-hidden rounded-full">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${accent}`}
+                  style={{ width: `${(value / max) * 100}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 

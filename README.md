@@ -95,6 +95,31 @@ first, so a failure there cannot orphan a file with no row pointing at it.
 > Storage rows cannot be deleted with SQL — a `protect_delete` trigger blocks it. Use the Storage
 > API (which is what the app does) or the dashboard.
 
+### Expense accounting model
+
+Every expense carries the figures an invoice actually shows, rather than a single number:
+
+| Field                     | Meaning                                                       |
+| ------------------------- | ------------------------------------------------------------- |
+| `net_amount`              | Taxable base — what the user types in                          |
+| `tax_rate` / `tax_amount` | VAT percentage and the resulting figure                        |
+| `amount`                  | Gross total (`net_amount + tax_amount`), kept in sync on save   |
+
+`amount` stays the gross total so every pre-existing total, chart and filter keeps working; the
+base and VAT are stored alongside rather than recomputed, so a historical row keeps the figure that
+was on its invoice even if a rate is edited later.
+
+`cost_type` splits spend two ways, and is what the dashboard reports on:
+
+- **direct** — belongs to a project or client, so it can be billed on. Link it with the *Client*
+  and *Project* dropdowns on the expense form.
+- **structural** — general overhead the company carries either way.
+
+Reimbursements are a small workflow of their own. Choosing a personal payment method ticks
+`reimbursable`, which is what the *To reimburse* and *Owed to* totals count. Confirming a
+reimbursement writes `status`, `reimbursed_on` and `reimbursed_by` in one update, so the ledger
+cannot half-apply.
+
 ### Running the SQL
 
 Apply in this order (all are idempotent):
@@ -106,6 +131,7 @@ Apply in this order (all are idempotent):
 | [`supabase/shared-workspace.sql`](supabase/shared-workspace.sql)       | Swap owner-scoped RLS for shared-team RLS   |
 | [`supabase/expenses-and-vault.sql`](supabase/expenses-and-vault.sql) | Expenses + password vault tables and RLS    |
 | [`supabase/expense-invoices.sql`](supabase/expense-invoices.sql)     | Invoice columns, paid_by, invoices bucket    |
+| [`supabase/expense-accounting.sql`](supabase/expense-accounting.sql) | Cost type, VAT columns, reimbursement fields |
 | [`supabase/seed.sql`](supabase/seed.sql)                               | Optional demo data                          |
 
 ## Local setup
@@ -224,6 +250,8 @@ supabase/schema.sql              tables, indexes, triggers, baseline RLS
 supabase/domain-restriction.sql  @inportgroup.com sign-up trigger
 supabase/shared-workspace.sql    shared-team RLS policies
 supabase/expenses-and-vault.sql  expenses + vault tables and RLS
+supabase/expense-invoices.sql    invoice columns, paid_by, invoices bucket
+supabase/expense-accounting.sql  cost type, VAT, reimbursement columns
 supabase/seed.sql                optional demo data
 .github/workflows/deploy.yml     builds and publishes to Pages on push to main
 src/index.css                    design tokens, dark mode, component classes

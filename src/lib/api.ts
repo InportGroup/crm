@@ -118,6 +118,28 @@ export const updateExpense = (id: string, values: Partial<Expense>) =>
 
 export const deleteExpense = (id: string) => run(supabase.from('expenses').delete().eq('id', id))
 
+/**
+ * Settles a reimbursement in one write: the status, the date the money moved
+ * and who confirmed it always change together, so they should not be three
+ * separate updates that could half-apply.
+ */
+export const confirmReimbursement = (id: string, confirmedBy: string | null, on: string) =>
+  run(
+    supabase
+      .from('expenses')
+      .update({ status: 'reimbursed', reimbursed_on: on, reimbursed_by: confirmedBy })
+      .eq('id', id),
+  )
+
+/** Reopens a reimbursement that was settled by mistake. */
+export const undoReimbursement = (id: string) =>
+  run(
+    supabase
+      .from('expenses')
+      .update({ status: 'approved', reimbursed_on: null, reimbursed_by: null })
+      .eq('id', id),
+  )
+
 // -- profiles ----------------------------------------------------------------
 
 /** Teammates who have signed in at least once; populated by a trigger on sign-up. */

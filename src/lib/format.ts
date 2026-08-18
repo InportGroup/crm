@@ -37,3 +37,28 @@ export function initials(first: string, last?: string | null): string {
 export function fullName(first: string, last?: string | null): string {
   return [first, last].filter(Boolean).join(' ')
 }
+
+/** Rounds to cents, avoiding the float drift that makes 0.1 + 0.2 fail. */
+export function round2(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+/**
+ * VAT split for an expense. The taxable base plus the rate are what the user
+ * types; the tax and the gross total follow from them.
+ */
+export function taxBreakdown(netAmount: number, taxRate: number) {
+  const net = round2(netAmount)
+  const tax = round2(net * (taxRate / 100))
+  return { net, tax, gross: round2(net + tax) }
+}
+
+/** Two decimals, for figures where rounding to whole euros would hide the VAT. */
+export function formatMoney(value: number, currency = 'EUR'): string {
+  return new Intl.NumberFormat('es-ES', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value)
+}

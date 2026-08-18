@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
+  confirmReimbursement,
   createExpenseReturning,
   deleteExpense,
   getInvoiceUrl,
@@ -9,18 +10,26 @@ import {
   listProfiles,
   nullifyBlanks,
   removeInvoice,
+  undoReimbursement,
   updateExpense,
   uploadInvoice,
 } from '../lib/api'
 import { useAsyncData } from '../hooks/useAsyncData'
 import { useFeedback } from '../context/feedback'
 import { useAuth } from '../context/auth'
-import { formatCurrency, formatDate, todayISO } from '../lib/format'
+import { formatCurrency, formatDate, formatMoney, taxBreakdown, todayISO } from '../lib/format'
 import {
+  CATEGORY_LABELS,
+  COST_TYPES,
+  DEFAULT_TAX_RATE,
   EXPENSE_CATEGORIES,
   EXPENSE_STATUSES,
   PAYMENT_METHODS,
+  PAYMENT_METHOD_LABELS,
+  REIMBURSABLE_METHODS,
+  TAX_RATES,
   type Company,
+  type CostType,
   type Deal,
   type Expense,
   type ExpenseCategory,
@@ -49,6 +58,8 @@ const CATEGORY_ICONS: Record<ExpenseCategory, string> = {
   travel: 'M10 2 3 9h3v7h3v-4h2v4h3V9h3L10 2Z',
   meals: 'M5 3v6a3 3 0 0 0 2 2.8V17h2v-5.2A3 3 0 0 0 11 9V3H9v5H8V3H7v5H6V3H5Zm8 0v14h2v-5h1a2 2 0 0 0 2-2V3h-5Z',
   software: 'M3 4h14v9H3V4Zm1.5 11h11l1.5 2H3l1.5-2Z',
+  cloud: 'M6 16a4 4 0 0 1-.5-7.97 5 5 0 0 1 9.66-1.02A3.5 3.5 0 0 1 14.5 16H6Z',
+  licenses: 'M4 3h9l3 3v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm2 5h7v1.5H6V8Zm0 3h7v1.5H6V11Zm0 3h4.5v1.5H6V14Z',
   hardware: 'M6 4h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm1 3v6h6V7H7Z',
   office: 'M4 3h8a1 1 0 0 1 1 1v13H3V4a1 1 0 0 1 1-1Zm10 6h2a1 1 0 0 1 1 1v7h-3V9Z',
   marketing: 'M4 8v4h2l4 3V5L6 8H4Zm10.5 2a3.5 3.5 0 0 1-1.5 2.9V7.1A3.5 3.5 0 0 1 14.5 10Z',
@@ -73,11 +84,19 @@ export function Expenses() {
   const { user } = useAuth()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<ExpenseStatus | 'all'>('all')
+  const [costFilter, setCostFilter] = useState<CostType | 'all'>('all')
+  const [categoryFilter, setCategoryFilter] = useState<ExpenseCategory | 'all'>('all')
   const [editing, setEditing] = useState<Expense | 'new' | null>(null)
 
   const companyNames = useMemo(() => {
     const map = new Map<string, string>()
     data?.companies.forEach((c) => map.set(c.id, c.name))
+    return map
+  }, [data])
+
+  const dealNames = useMemo(() => {
+    const map = new Map<string, string>()
+    data?.deals.forEach((d) => map.set(d.id, d.title))
     return map
   }, [data])
 
@@ -92,21 +111,32 @@ export function Expenses() {
     const q = search.trim().toLowerCase()
     return expenses.filter((e) => {
       if (statusFilter !== 'all' && e.status !== statusFilter) return false
+      if (costFilter !== 'all' && e.cost_type !== costFilter) return false
+      if (categoryFilter !== 'all' && e.category !== categoryFilter) return false
       if (!q) return true
-      return [e.description, e.vendor, e.category, e.notes]
+      return [e.description, e.vendor, e.category, e.invoice_number, e.notes]
         .filter(Boolean)
         .some((f) => String(f).toLowerCase().includes(q))
     })
-  }, [data, search, statusFilter])
+  }, [data, search, statusFilter, costFilter, categoryFilter])
 
   const totals = useMemo(() => {
     const expenses = data?.expenses ?? []
     const month = todayISO().slice(0, 7)
     const sum = (list: Expense[]) => list.reduce((t, e) => t + Number(e.amount), 0)
+    const monthly = expenses.filter((e) => e.spent_on.startsWith(month))
     return {
-      thisMonth: sum(expenses.filter((e) => e.spent_on.startsWith(month))),
+      thisMonth: sum(monthly),
+      direct: sum(monthly.filter((e) => e.cost_type === 'direct')),
+      structural: sum(monthly.filter((e) => e.cost_type === 'structural')),
+      // Deductible VAT for the month, the figure the quarterly return needs.
+      taxThisMonth: monthly.reduce((t, e) => t + Number(e.tax_amount ?? 0), 0),
       pending: sum(expenses.filter((e) => e.status === 'pending')),
-      awaitingReimbursement: sum(expenses.filter((e) => e.status === 'approved')),
+      awaitingReimbursement: sum(
+        expenses.filter(
+          (e) => e.reimbursable && e.status !== 'reimbursed' && e.status !== 'rejected',
+        ),
+      ),
       all: sum(expenses),
     }
   }, [data])
@@ -124,7 +154,10 @@ export function Expenses() {
   const byPayer = useMemo(() => {
     const map = new Map<string, number>()
     ;(data?.expenses ?? [])
-      .filter((e) => e.paid_by && e.status !== 'reimbursed' && e.status !== 'rejected')
+      .filter(
+        (e) =>
+          e.paid_by && e.reimbursable && e.status !== 'reimbursed' && e.status !== 'rejected',
+      )
       .forEach((e) => map.set(e.paid_by!, (map.get(e.paid_by!) ?? 0) + Number(e.amount)))
     return [...map.entries()].sort((a, b) => b[1] - a[1])
   }, [data])
@@ -136,6 +169,35 @@ export function Expenses() {
       toast(`Marked ${status}.`)
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not update.', 'error')
+    }
+  }
+
+  /** Settles what the company owes back, recording when and who confirmed it. */
+  async function onConfirmReimbursement(expense: Expense) {
+    const ok = await confirm({
+      title: 'Confirm reimbursement?',
+      message: `${formatCurrency(Number(expense.amount), expense.currency)} paid back to ${
+        expense.paid_by ? (payerNames.get(expense.paid_by) ?? 'the payer') : 'the payer'
+      }. This records today as the reimbursement date.`,
+      confirmLabel: 'Confirm',
+    })
+    if (!ok) return
+    try {
+      await confirmReimbursement(expense.id, user?.id ?? null, todayISO())
+      reload()
+      toast('Reimbursement confirmed.')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not confirm.', 'error')
+    }
+  }
+
+  async function onUndoReimbursement(expense: Expense) {
+    try {
+      await undoReimbursement(expense.id)
+      reload()
+      toast('Reimbursement reopened.')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not reopen.', 'error')
     }
   }
 
@@ -176,15 +238,29 @@ export function Expenses() {
       {error && <ErrorNote message={error} />}
 
       {!loading && (data?.expenses.length ?? 0) > 0 && (
-        <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <Total label="This month" value={formatCurrency(totals.thisMonth)} />
+        <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-5">
+          <Total
+            label="This month"
+            value={formatCurrency(totals.thisMonth)}
+            hint={`incl. ${formatCurrency(totals.taxThisMonth)} VAT`}
+          />
+          <Total
+            label="Direct costs"
+            value={formatCurrency(totals.direct)}
+            hint="this month, on projects"
+          />
+          <Total
+            label="Structural costs"
+            value={formatCurrency(totals.structural)}
+            hint="this month, overhead"
+          />
           <Total label="Pending approval" value={formatCurrency(totals.pending)} tone="warn" />
           <Total
             label="To reimburse"
             value={formatCurrency(totals.awaitingReimbursement)}
             tone="info"
+            className="col-span-2 xl:col-span-1"
           />
-          <Total label="All time" value={formatCurrency(totals.all)} />
         </div>
       )}
 
@@ -193,7 +269,7 @@ export function Expenses() {
       ) : data && data.expenses.length === 0 ? (
         <EmptyState
           title="No expenses logged"
-          description="Record internal spend — travel, software, office costs — and track it through approval."
+          description="Record internal spend — hardware, cloud, licences, travel — split it into direct and structural costs, and track it through approval."
           action={
             <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
               New expense
@@ -221,6 +297,32 @@ export function Expenses() {
             </div>
           </div>
 
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+              <Chip active={costFilter === 'all'} onClick={() => setCostFilter('all')}>
+                All costs
+              </Chip>
+              {COST_TYPES.map((t) => (
+                <Chip key={t.id} active={costFilter === t.id} onClick={() => setCostFilter(t.id)}>
+                  {t.label}
+                </Chip>
+              ))}
+            </div>
+            <select
+              className="input sm:ml-auto sm:max-w-52"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value as ExpenseCategory | 'all')}
+              aria-label="Filter by category"
+            >
+              <option value="all">All categories</option>
+              {EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {CATEGORY_LABELS[c]}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {(byCategory.length > 1 || byPayer.length > 0) && (
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
               {byCategory.length > 1 && (
@@ -230,7 +332,7 @@ export function Expenses() {
                     {byCategory.map(([cat, value]) => (
                       <li key={cat}>
                         <div className="flex items-baseline justify-between text-sm">
-                          <span className="text-muted capitalize">{cat}</span>
+                          <span className="text-muted">{CATEGORY_LABELS[cat] ?? cat}</span>
                           <span className="text-ink font-medium">{formatCurrency(value)}</span>
                         </div>
                         <div className="bg-neutral-soft mt-1.5 h-2 overflow-hidden rounded-full">
@@ -276,10 +378,18 @@ export function Expenses() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-ink truncate text-sm font-medium">{expense.description}</p>
-                    <p className="text-subtle truncate text-xs capitalize">
-                      {expense.category} · {formatDate(expense.spent_on)}
+                    <p className="text-subtle truncate text-xs">
+                      {CATEGORY_LABELS[expense.category] ?? expense.category} ·{' '}
+                      {formatDate(expense.spent_on)}
+                      {expense.vendor ? ` · ${expense.vendor}` : ''}
                     </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <CostTypeBadge type={expense.cost_type} />
+                      {expense.deal_id && (
+                        <span className="text-muted text-xs">
+                          {dealNames.get(expense.deal_id) ?? ''}
+                        </span>
+                      )}
                       {expense.paid_by && (
                         <span className="text-muted text-xs">
                           Paid by {payerNames.get(expense.paid_by) ?? '—'}
@@ -295,12 +405,24 @@ export function Expenses() {
                     <p className="text-ink text-sm font-semibold">
                       {formatCurrency(Number(expense.amount), expense.currency)}
                     </p>
+                    <p className="text-subtle text-xs">
+                      +{formatCurrency(Number(expense.tax_amount ?? 0), expense.currency)} VAT
+                    </p>
                     <span className={`badge mt-1 ${STATUS_STYLES[expense.status]}`}>
                       {expense.status}
                     </span>
                   </div>
                 </div>
                 <div className="mt-3 flex gap-2">
+                  {expense.reimbursable && expense.status !== 'reimbursed' && (
+                    <button
+                      type="button"
+                      className="btn-primary flex-1 py-1.5"
+                      onClick={() => void onConfirmReimbursement(expense)}
+                    >
+                      Reimburse
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn-secondary flex-1 py-1.5"
@@ -327,10 +449,13 @@ export function Expenses() {
                 <thead className="bg-canvas">
                   <tr>
                     <th className="th">Description</th>
+                    <th className="th">Type</th>
                     <th className="th">Paid by</th>
                     <th className="th">Date</th>
                     <th className="th">Invoice</th>
-                    <th className="th text-right">Amount</th>
+                    <th className="th text-right">Base</th>
+                    <th className="th text-right">VAT</th>
+                    <th className="th text-right">Total</th>
                     <th className="th">Status</th>
                     <th className="th" />
                   </tr>
@@ -340,10 +465,11 @@ export function Expenses() {
                     <tr key={expense.id} className="hover:bg-canvas transition-colors">
                       <td className="td">
                         <p className="text-ink font-medium">{expense.description}</p>
-                        <p className="text-subtle text-xs capitalize">
+                        <p className="text-subtle text-xs">
                           {[
-                            expense.category,
+                            CATEGORY_LABELS[expense.category] ?? expense.category,
                             expense.vendor,
+                            expense.deal_id && dealNames.get(expense.deal_id),
                             expense.company_id && companyNames.get(expense.company_id),
                           ]
                             .filter(Boolean)
@@ -351,7 +477,14 @@ export function Expenses() {
                         </p>
                       </td>
                       <td className="td">
+                        <CostTypeBadge type={expense.cost_type} />
+                      </td>
+                      <td className="td">
                         {expense.paid_by ? (payerNames.get(expense.paid_by) ?? '—') : '—'}
+                        <p className="text-subtle text-xs">
+                          {PAYMENT_METHOD_LABELS[expense.payment_method] ??
+                            expense.payment_method}
+                        </p>
                       </td>
                       <td className="td">{formatDate(expense.spent_on)}</td>
                       <td className="td">
@@ -359,6 +492,13 @@ export function Expenses() {
                         {expense.invoice_number && (
                           <p className="text-subtle text-xs">#{expense.invoice_number}</p>
                         )}
+                      </td>
+                      <td className="td text-muted text-right">
+                        {formatCurrency(Number(expense.net_amount ?? 0), expense.currency)}
+                      </td>
+                      <td className="td text-muted text-right">
+                        {formatCurrency(Number(expense.tax_amount ?? 0), expense.currency)}
+                        <span className="text-subtle block text-xs">{expense.tax_rate ?? 0}%</span>
                       </td>
                       <td className="td text-ink text-right font-medium">
                         {formatCurrency(Number(expense.amount), expense.currency)}
@@ -377,9 +517,38 @@ export function Expenses() {
                             </option>
                           ))}
                         </select>
+                        {expense.status === 'reimbursed' && expense.reimbursed_on && (
+                          <p className="text-subtle mt-1 text-xs">
+                            {formatDate(expense.reimbursed_on)}
+                            {expense.reimbursed_by
+                              ? ` · ${payerNames.get(expense.reimbursed_by) ?? ''}`
+                              : ''}
+                          </p>
+                        )}
+                        {expense.reimbursable && expense.status !== 'reimbursed' && (
+                          <p className="text-warn-ink mt-1 text-xs">Owed back</p>
+                        )}
                       </td>
                       <td className="td">
                         <div className="flex justify-end gap-1">
+                          {expense.reimbursable && expense.status !== 'reimbursed' && (
+                            <button
+                              type="button"
+                              className="btn-ghost text-brand px-2 py-1"
+                              onClick={() => void onConfirmReimbursement(expense)}
+                            >
+                              Reimburse
+                            </button>
+                          )}
+                          {expense.status === 'reimbursed' && (
+                            <button
+                              type="button"
+                              className="btn-ghost px-2 py-1"
+                              onClick={() => void onUndoReimbursement(expense)}
+                            >
+                              Reopen
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn-ghost px-2 py-1"
@@ -466,17 +635,33 @@ function InvoiceLink({ expense }: { expense: Expense }) {
   )
 }
 
+function CostTypeBadge({ type }: { type: CostType }) {
+  return (
+    <span
+      className={`badge ${
+        type === 'direct' ? 'bg-brand-soft text-brand-ink' : 'bg-info-soft text-info-ink'
+      }`}
+    >
+      {type === 'direct' ? 'Direct' : 'Structural'}
+    </span>
+  )
+}
+
 function Total({
   label,
   value,
   tone,
+  hint,
+  className = '',
 }: {
   label: string
   value: string
   tone?: 'warn' | 'info'
+  hint?: string
+  className?: string
 }) {
   return (
-    <div className="card px-4 py-3">
+    <div className={`card px-4 py-3 ${className}`}>
       <p className="text-subtle text-xs">{label}</p>
       <p
         className={`mt-0.5 text-lg font-semibold tracking-tight ${
@@ -485,6 +670,7 @@ function Total({
       >
         {value}
       </p>
+      {hint && <p className="text-subtle mt-0.5 text-xs">{hint}</p>}
     </div>
   )
 }
@@ -533,12 +719,15 @@ function ExpenseForm({
 }) {
   const [form, setForm] = useState({
     description: expense?.description ?? '',
-    amount: String(expense?.amount ?? ''),
+    // The user types the taxable base; the gross total is derived from it.
+    net_amount: expense ? String(expense.net_amount ?? '') : '',
+    tax_rate: String(expense?.tax_rate ?? DEFAULT_TAX_RATE),
     currency: expense?.currency ?? 'EUR',
+    cost_type: expense?.cost_type ?? ('structural' as CostType),
     category: expense?.category ?? ('other' as ExpenseCategory),
     spent_on: expense?.spent_on ?? todayISO(),
     vendor: expense?.vendor ?? '',
-    payment_method: expense?.payment_method ?? ('card' as PaymentMethod),
+    payment_method: expense?.payment_method ?? ('company_card' as PaymentMethod),
     status: expense?.status ?? ('pending' as ExpenseStatus),
     invoice_number: expense?.invoice_number ?? '',
     // Default to whoever is filling the form in — the common case.
@@ -547,12 +736,29 @@ function ExpenseForm({
     deal_id: expense?.deal_id ?? '',
     notes: expense?.notes ?? '',
   })
+  // Tracked separately: it follows the payment method until the user overrides
+  // it. New expenses default to the company card, which is never owed back.
+  const [reimbursable, setReimbursable] = useState(expense?.reimbursable ?? false)
   const [file, setFile] = useState<File | null>(null)
   const [removeExisting, setRemoveExisting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const set = (key: keyof typeof form, value: string) => setForm((f) => ({ ...f, [key]: value }))
+
+  /**
+   * Picking a personal payment method implies the money is owed back. It stays
+   * a suggestion — the checkbox below can still be unticked.
+   */
+  function setPaymentMethod(method: string) {
+    set('payment_method', method)
+    setReimbursable(REIMBURSABLE_METHODS.includes(method as PaymentMethod))
+  }
+
+  const totals = useMemo(
+    () => taxBreakdown(Number(form.net_amount || 0), Number(form.tax_rate || 0)),
+    [form.net_amount, form.tax_rate],
+  )
 
   function onPickFile(picked: File | null) {
     setError('')
@@ -570,7 +776,16 @@ function ExpenseForm({
     setError('')
 
     try {
-      const base = nullifyBlanks({ ...form, amount: Number(form.amount || 0) })
+      // Persist all three figures: the base and VAT for accounting, and the
+      // gross in `amount` so every existing total and chart stays correct.
+      const base = nullifyBlanks({
+        ...form,
+        net_amount: totals.net,
+        tax_rate: Number(form.tax_rate || 0),
+        tax_amount: totals.tax,
+        amount: totals.gross,
+        reimbursable,
+      })
 
       if (expense) {
         let invoicePath = expense.invoice_path
@@ -649,18 +864,58 @@ function ExpenseForm({
           />
         </Field>
 
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Amount">
+        {/* Direct vs structural — the split the dashboard reports on. */}
+        <Field label="Cost type">
+          <div className="grid grid-cols-2 gap-2">
+            {COST_TYPES.map((type) => (
+              <button
+                key={type.id}
+                type="button"
+                onClick={() => set('cost_type', type.id)}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  form.cost_type === type.id
+                    ? 'border-brand bg-brand-soft'
+                    : 'border-line hover:border-line-strong'
+                }`}
+              >
+                <span
+                  className={`block text-sm font-medium ${
+                    form.cost_type === type.id ? 'text-brand-ink' : 'text-ink'
+                  }`}
+                >
+                  {type.label}
+                </span>
+                <span className="text-subtle block text-xs">{type.hint}</span>
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="Taxable base">
             <input
               type="number"
               inputMode="decimal"
               min="0"
               step="0.01"
               className="input"
-              value={form.amount}
-              onChange={(e) => set('amount', e.target.value)}
+              value={form.net_amount}
+              onChange={(e) => set('net_amount', e.target.value)}
               required
             />
+          </Field>
+          <Field label="VAT %">
+            <select
+              className="input"
+              value={form.tax_rate}
+              onChange={(e) => set('tax_rate', e.target.value)}
+            >
+              {TAX_RATES.map((r) => (
+                <option key={r} value={r}>
+                  {r}%
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Currency">
             <select
@@ -686,43 +941,58 @@ function ExpenseForm({
           </Field>
         </div>
 
+        {/* Running total, so the figure on the invoice can be checked. */}
+        <div className="border-line bg-canvas flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-lg border px-3 py-2.5">
+          <span className="text-subtle text-xs">
+            Base {formatMoney(totals.net, form.currency)} · VAT{' '}
+            {formatMoney(totals.tax, form.currency)} at {form.tax_rate || 0}%
+          </span>
+          <span className="text-ink text-sm font-semibold">
+            Total {formatMoney(totals.gross, form.currency)}
+          </span>
+        </div>
+
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Category">
             <select
-              className="input capitalize"
+              className="input"
               value={form.category}
               onChange={(e) => set('category', e.target.value)}
             >
               {EXPENSE_CATEGORIES.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {CATEGORY_LABELS[c]}
                 </option>
               ))}
             </select>
           </Field>
-          <Field label="Payment method">
-            <select
-              className="input capitalize"
-              value={form.payment_method}
-              onChange={(e) => set('payment_method', e.target.value)}
-            >
-              {PAYMENT_METHODS.map((m) => (
-                <option key={m} value={m}>
-                  {m.replace('_', ' ')}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Vendor">
+          <Field label="Supplier" hint="The company that issued the invoice.">
             <input
               className="input"
               value={form.vendor}
               onChange={(e) => set('vendor', e.target.value)}
-              placeholder="KLM"
+              placeholder="Amazon Web Services"
             />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Payment method">
+            <select
+              className="input"
+              value={form.payment_method}
+              onChange={(e) => setPaymentMethod(e.target.value)}
+            >
+              {/* A legacy value stays in the list only while it is in use. */}
+              {(PAYMENT_METHODS.includes(form.payment_method as PaymentMethod)
+                ? PAYMENT_METHODS
+                : [form.payment_method as PaymentMethod, ...PAYMENT_METHODS]
+              ).map((m) => (
+                <option key={m} value={m}>
+                  {PAYMENT_METHOD_LABELS[m] ?? m}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Status">
             <select
@@ -738,6 +1008,21 @@ function ExpenseForm({
             </select>
           </Field>
         </div>
+
+        <label className="border-line flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5">
+          <input
+            type="checkbox"
+            checked={reimbursable}
+            onChange={(e) => setReimbursable(e.target.checked)}
+            className="accent-brand mt-0.5 h-4 w-4"
+          />
+          <span>
+            <span className="text-ink block text-sm font-medium">Reimbursable</span>
+            <span className="text-subtle block text-xs">
+              Paid out of pocket — the company owes this back to whoever paid.
+            </span>
+          </span>
+        </label>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field
@@ -825,7 +1110,7 @@ function ExpenseForm({
         </Field>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Company" hint="Optional — if billable to a client.">
+          <Field label="Client" hint="Which client this cost belongs to.">
             <select
               className="input"
               value={form.company_id}
@@ -839,7 +1124,7 @@ function ExpenseForm({
               ))}
             </select>
           </Field>
-          <Field label="Deal">
+          <Field label="Project" hint="The deal or project this cost is charged to.">
             <select
               className="input"
               value={form.deal_id}
