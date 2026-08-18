@@ -41,7 +41,7 @@ const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
     items: [
       { to: '/contacts', label: 'Contacts', icon: ICONS.contacts },
       { to: '/companies', label: 'Companies', icon: ICONS.companies },
-      { to: '/deals', label: 'Deals', icon: ICONS.deals },
+      { to: '/deals', label: 'Pipeline', icon: ICONS.deals },
       { to: '/tasks', label: 'Tasks', icon: ICONS.tasks },
     ],
   },
@@ -58,7 +58,7 @@ const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
 const TAB_BAR: NavItem[] = [
   { to: '/', label: 'Home', end: true, icon: ICONS.dashboard },
   { to: '/contacts', label: 'Contacts', icon: ICONS.contacts },
-  { to: '/deals', label: 'Deals', icon: ICONS.deals },
+  { to: '/deals', label: 'Pipeline', icon: ICONS.deals },
   { to: '/tasks', label: 'Tasks', icon: ICONS.tasks },
 ]
 

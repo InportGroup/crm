@@ -105,7 +105,7 @@ export function Deals() {
   return (
     <>
       <PageHeader
-        title="Deals"
+        title="Pipeline"
         action={
           <button type="button" className="btn-primary" onClick={() => setEditing('new')}>
             New deal

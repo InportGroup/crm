@@ -159,7 +159,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search contacts, companies and deals…"
+            placeholder="Search contacts, companies and pipeline…"
             className="text-ink placeholder:text-subtle flex-1 bg-transparent py-3.5 text-sm outline-none"
           />
           <kbd className="border-line bg-canvas text-subtle hidden rounded border px-1.5 py-0.5 font-sans text-[10px] sm:block">

@@ -208,23 +208,26 @@ Without these, the emailed link bounces to Supabase's default and the user never
 
 ## What's in it
 
-- **Dashboard** — pipeline by stage, open/won totals, overdue tasks, recent activity.
+- **Dashboard** — direct vs structural cost split for the month, pipeline by stage, open/won
+  totals, overdue tasks, recent activity.
 - **Contacts** — searchable, status-filtered, with a detail drawer showing linked deals, open
   tasks and a full activity timeline.
 - **Companies** — contact count and open pipeline per organisation.
-- **Deals** — kanban pipeline with drag-and-drop on desktop and a "Move to…" picker on touch,
-  plus weighted-pipeline and win-rate figures.
+- **Pipeline** — kanban board of deals with drag-and-drop on desktop and a "Move to…" picker on
+  touch, plus weighted-pipeline and win-rate figures.
 - **Tasks** — open / due / done filters, overdue highlighting, one-tap completion.
-- **Expenses** (Internal) — internal spend with category, vendor, payment method and an approval
-  workflow (pending → approved → reimbursed / rejected). Records **who paid** (picked from
-  teammates who have signed in) and attaches the **invoice** — a reference number plus the PDF or
-  photo itself. Month / pending / to-reimburse totals, a category breakdown, and an "Owed to"
-  panel showing unreimbursed spend per person. Optionally linked to a company or deal when spend
-  is billable.
+- **Expenses** (Internal) — internal spend split into **direct** (billable to a client or
+  project) and **structural** (overhead) costs, with taxable base, VAT rate, category, supplier
+  and payment method, through an approval workflow (pending → approved → reimbursed / rejected).
+  Records **who paid** (picked from teammates who have signed in) and attaches the **invoice** — a
+  reference number plus the PDF or photo itself. Spend put on a personal card or cash is marked
+  reimbursable and settled with a one-click confirmation that records the date and who confirmed
+  it. Month / direct / structural / pending / to-reimburse totals, a category breakdown and an
+  "Owed to" panel showing unreimbursed spend per person.
 - **Passwords** (Internal) — shared credential store with masked secrets, reveal toggle,
   copy-to-clipboard and a strong password generator. **See the warning below.**
 - **Activity log** — calls, notes, emails and meetings against any contact or deal.
-- **⌘K search** — one palette across contacts, companies and deals.
+- **⌘K search** — one palette across contacts, companies, pipeline, expenses and passwords.
 - **Dark mode** — follows the OS by default, with a manual toggle that persists.
 - **Mobile** — bottom tab bar, card layouts in place of tables, and bottom-sheet dialogs.
 
@@ -261,7 +264,7 @@ src/lib/types.ts                 row types and the stage/status enums
 src/context/                     auth, theme and feedback (toast/confirm) providers
 src/hooks/                       useAsyncData: load, error, reload
 src/components/                  Layout, Modal, CommandPalette, ActivityFeed, Logo, UI primitives
-src/pages/                       Dashboard, Contacts, Companies, Deals, Tasks, Expenses, Vault, Login
+src/pages/                       Dashboard, Contacts, Companies, Deals (Pipeline), Tasks, Expenses, Vault, Login
 ```
 
 ## Scripts

@@ -238,6 +238,7 @@ export function Dashboard() {
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <section className="card p-5">
           <h2 className="text-ink text-sm font-semibold">Pipeline by stage</h2>
+          <p className="text-subtle mt-0.5 text-xs">Open and closed deals across the funnel</p>
           <ul className="mt-4 space-y-3">
             {stageTotals.map((stage) => (
               <li key={stage.id}>
